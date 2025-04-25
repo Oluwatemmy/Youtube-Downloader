@@ -75,7 +75,7 @@ def handle_errors(e, attempt, retries):
 
 def download_video(url, retries=3):
     """
-    Downloads a single video or an entire playlist with retries and duplicate check.
+    Downloads a single video or an entire playlist with retries, resolution selection, and duplicate check.
     """
     attempt = 1
     download_path = create_download_path()
@@ -86,43 +86,58 @@ def download_video(url, retries=3):
             if not video_info:
                 return
 
-            entries = video_info.get('entries', [video_info])
+            formats = video_info.get('formats', [])
+            if not formats:
+                print("❌ No downloadable formats found for this video.")
+                return
 
-            for entry in entries:
-                title = sanitize_filename(entry.get('title', 'video'))
-                filesize = entry.get('filesize')
-                print(f"\nStarting download for: {title}")
-                if filesize:
-                    print(f"Estimated file size: {format_size(filesize)}")
+            # Display available formats and file sizes
+            print("\nAvailable video formats:")
+            for i, fmt in enumerate(formats):
+                if fmt.get('acodec') != 'none':  # Ignore formats without audio
+                    size = fmt.get('filesize')
+                    print(f"{i + 1}. {fmt.get('format_note', 'No note')} - {fmt.get('height', 'N/A')}p - {format_size(size)}")
 
-                # Expected file (check common extensions)
-                file_exists = any(
-                    os.path.exists(os.path.join(download_path, f"{title}.{ext}"))
-                    for ext in ['mp4', 'mkv', 'webm']
-                )
+            # Ask user to select format
+            choice = int(input(f"\nChoose the format number (1-{len(formats)}): ").strip())
+            if choice < 1 or choice > len(formats):
+                print("❌ Invalid choice.")
+                return
 
-                if file_exists:
-                    print(f"⚠️  Skipping already downloaded video: {title}")
-                    continue
+            selected_format = formats[choice - 1]
+            resolution = selected_format.get('height', 'N/A')
+            filesize = selected_format.get('filesize')
+            print(f"\nSelected resolution: {resolution}p - {format_size(filesize)}")
 
-                ydl_opts = {
-                    'logger': MyLogger(),
-                    'quiet': True,
-                    'no_warnings': True,
-                    'format': 'bestvideo+bestaudio/best',
-                    'outtmpl': os.path.join(download_path, '%(title)s.%(ext)s'),
-                    'progress_hooks': [progress_hook],
-                    'noplaylist': False,
-                    'merge_output_format': 'mp4',  # ensure merged file format
-                    'ignoreerrors': True,  # Skip bad videos
-                }
+            # Check if file already exists
+            title = sanitize_filename(video_info.get('title', 'video'))
+            file_exists = any(
+                os.path.exists(os.path.join(download_path, f"{title}.{ext}"))
+                for ext in ['mp4', 'mkv', 'webm']
+            )
 
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([entry['webpage_url']])
+            if file_exists:
+                print(f"⚠️  Skipping already downloaded video: {title}")
+                return
 
-                print(f"✅ Download complete: {title}")
-                print(f"📂  Saved to: {download_path}")
+            # Set download options for the selected format
+            ydl_opts = {
+                'logger': MyLogger(),
+                'quiet': True,
+                'no_warnings': True,
+                'format': selected_format['format_id'],
+                'outtmpl': os.path.join(download_path, '%(title)s.%(ext)s'),
+                'progress_hooks': [progress_hook],
+                'merge_output_format': 'mp4',  # Ensure merged file format
+                'ignoreerrors': True,  # Skip bad videos
+            }
 
+            # Download the video with the selected format
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+
+            print(f"✅ Download complete: {title}")
+            print(f"📂  Saved to: {download_path}")
             return
 
         except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError) as e:
@@ -132,7 +147,6 @@ def download_video(url, retries=3):
             print(f"❌ Unexpected error: {e}")
             if not handle_errors(e, attempt, retries):
                 break
-
     print(f"❌ Download failed after {retries} attempts.")
 
 def get_video_info(url):
