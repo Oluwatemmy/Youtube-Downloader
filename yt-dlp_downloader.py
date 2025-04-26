@@ -141,7 +141,7 @@ def download_video(url, retries=3):
             selected_format = filtered_formats[choice - 1]
             resolution = selected_format.get('resolution')
             filesize = selected_format.get('filesize')
-            print(f"\nSelected resolution: {resolution}p - {format_size(filesize)}")
+            print(f"\nSelected resolution: {resolution} - {format_size(filesize)}")
 
             # Check if file already exists
             title = sanitize_filename(video_info.get('title', 'video'))
