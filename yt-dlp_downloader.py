@@ -8,6 +8,9 @@ import yt_dlp
 import os
 import time
 
+# Target resolutions
+TARGET_RESOLUTIONS = ["360p", "480p", "720p", "1080p", "1440p"]
+
 class MyLogger:
     def debug(self, msg): pass
     def warning(self, msg): pass
@@ -66,12 +69,22 @@ def handle_errors(e, attempt, retries):
     else:
         print(f"❌ Download error: {msg}")
     
-    attempt += 1
     if attempt <= retries:
         print(f"Retrying... ({attempt}/{retries})")
         time.sleep(2)  # Wait before retrying
         return True
     return False
+
+def get_video_info(url):
+    """
+    Fetch video or playlist info without downloading.
+    """
+    try:
+        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True}) as ydl:
+            return ydl.extract_info(url, download=False)
+    except Exception as e:
+        print(f"❌ Error retrieving video info: {e}")
+    return None
 
 def download_video(url, retries=3):
     """
@@ -90,22 +103,43 @@ def download_video(url, retries=3):
             if not formats:
                 print("❌ No downloadable formats found for this video.")
                 return
+            
+            # Filter formats: only mp4 + common resolutions
+            filtered_formats = []
+            for f in formats:
+                resolution = f.get('format_note') or f.get('height')
+                ext = f.get('ext')
+                filesize = f.get('filesize') or f.get('filesize_approx')
+
+                if isinstance(resolution, int):
+                    resolution = f"{resolution}p"
+
+                if ext == 'mp4' and resolution in TARGET_RESOLUTIONS:
+                    filtered_formats.append({
+                        'format_id': f['format_id'],
+                        'resolution': resolution,
+                        'filesize': filesize,
+                    })
+
+            if not filtered_formats:
+                print("❌ No suitable formats found for the specified resolutions.")
+                return
 
             # Display available formats and file sizes
             print("\nAvailable video formats:")
-            for i, fmt in enumerate(formats):
-                if fmt.get('acodec') != 'none':  # Ignore formats without audio
-                    size = fmt.get('filesize')
-                    print(f"{i + 1}. {fmt.get('format_note', 'No note')} - {fmt.get('height', 'N/A')}p - {format_size(size)}")
+            for i, fmt in enumerate(filtered_formats):
+                resolution = fmt.get('resolution', 'Unknown')
+                filesize = fmt.get('filesize')
+                print(f"{i + 1}. {resolution} - {format_size(filesize)}")
 
             # Ask user to select format
-            choice = int(input(f"\nChoose the format number (1-{len(formats)}): ").strip())
-            if choice < 1 or choice > len(formats):
+            choice = int(input(f"\nChoose the format number (1-{len(filtered_formats)}): ").strip())
+            if choice < 1 or choice > len(filtered_formats):
                 print("❌ Invalid choice.")
                 return
 
-            selected_format = formats[choice - 1]
-            resolution = selected_format.get('height', 'N/A')
+            selected_format = filtered_formats[choice - 1]
+            resolution = selected_format.get('resolution')
             filesize = selected_format.get('filesize')
             print(f"\nSelected resolution: {resolution}p - {format_size(filesize)}")
 
@@ -134,11 +168,14 @@ def download_video(url, retries=3):
 
             # Download the video with the selected format
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+                result = ydl.download([url])
 
-            print(f"✅ Download complete: {title}")
-            print(f"📂  Saved to: {download_path}")
-            return
+            if result == 0:
+                print(f"✅ Download complete: {title}")
+                print(f"📂  Saved to: {download_path}")
+                return
+            else:
+                print("❌ Download failed.")
 
         except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError) as e:
             if not handle_errors(e, attempt, retries):
@@ -147,18 +184,8 @@ def download_video(url, retries=3):
             print(f"❌ Unexpected error: {e}")
             if not handle_errors(e, attempt, retries):
                 break
+        attempt += 1
     print(f"❌ Download failed after {retries} attempts.")
-
-def get_video_info(url):
-    """
-    Fetch video or playlist info without downloading.
-    """
-    try:
-        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True}) as ydl:
-            return ydl.extract_info(url, download=False)
-    except Exception as e:
-        print(f"❌ Error retrieving video info: {e}")
-    return None
 
 def main():
     """
