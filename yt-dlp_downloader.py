@@ -98,6 +98,10 @@ def download_video(url, retries=3):
             video_info = get_video_info(url)
             if not video_info:
                 return
+            
+            # return video title
+            title = video_info.get('title', 'video')
+            print(f"\n🎬 Title: {title}\n")
 
             formats = video_info.get('formats', [])
             if not formats:
@@ -133,7 +137,11 @@ def download_video(url, retries=3):
                 print(f"{i + 1}. {resolution} - {format_size(filesize)}")
 
             # Ask user to select format
-            choice = int(input(f"\nChoose the format number (1-{len(filtered_formats)}): ").strip())
+            try:
+                choice = int(input(f"\nChoose the format number (1-{len(filtered_formats)}): ").strip())
+            except ValueError:
+                print("❌ Invalid input. Please enter a number.")
+                return
             if choice < 1 or choice > len(filtered_formats):
                 print("❌ Invalid choice.")
                 return
@@ -151,7 +159,7 @@ def download_video(url, retries=3):
             )
 
             if file_exists:
-                print(f"⚠️  Skipping already downloaded video: {title}")
+                print(f"⚠️  Skipping! Video already exists at directory: {title}")
                 return
 
             # Set download options for the selected format
@@ -159,7 +167,7 @@ def download_video(url, retries=3):
                 'logger': MyLogger(),
                 'quiet': True,
                 'no_warnings': True,
-                'format': selected_format['format_id'],
+                'format': f"{selected_format['format_id']}+bestaudio/best",
                 'outtmpl': os.path.join(download_path, '%(title)s.%(ext)s'),
                 'progress_hooks': [progress_hook],
                 'merge_output_format': 'mp4',  # Ensure merged file format
