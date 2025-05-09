@@ -118,7 +118,7 @@ def download_video(url, retries=3):
                 if isinstance(resolution, int):
                     resolution = f"{resolution}p"
 
-                if ext == 'mp4' and resolution in TARGET_RESOLUTIONS:
+                if ext == 'mp4' and resolution in TARGET_RESOLUTIONS and f.get("vcodec") != 'none' and f.get("acodec") != 'none':
                     filtered_formats.append({
                         'format_id': f['format_id'],
                         'resolution': resolution,
