@@ -9,7 +9,7 @@ import os
 import time
 
 # Target resolutions
-TARGET_RESOLUTIONS = ["360p", "480p", "720p", "1080p", "1440p"]
+TARGET_RESOLUTIONS = ["360p", "480p", "720p", "1080p", "1440p", "2160p"]
 
 class MyLogger:
     def debug(self, msg): pass
@@ -108,33 +108,53 @@ def download_video(url, retries=3):
                 print("❌ No downloadable formats found for this video.")
                 return
             
-            # Filter formats: only mp4 + common resolutions
+            # Include all video formats (even video-only), and ignore audio-only
             filtered_formats = []
             for f in formats:
                 resolution = f.get('format_note') or f.get('height')
-                ext = f.get('ext')
-                filesize = f.get('filesize') or f.get('filesize_approx')
+                if f.get('vcodec') != 'none' and resolution in TARGET_RESOLUTIONS:
+                    if isinstance(resolution, int):
+                        resolution = f"{resolution}p"
+                    ext = f.get('ext')
+                    filesize = f.get('filesize') or f.get('filesize_approx')
 
-                if isinstance(resolution, int):
-                    resolution = f"{resolution}p"
-
-                if ext == 'mp4' and resolution in TARGET_RESOLUTIONS and f.get("vcodec") != 'none' and f.get("acodec") != 'none':
                     filtered_formats.append({
                         'format_id': f['format_id'],
-                        'resolution': resolution,
+                        'resolution': resolution or 'Unknown',
                         'filesize': filesize,
+                        'ext': ext,
                     })
+            
+            # # Filter formats: only mp4 + common resolutions
+            # filtered_formats = []
+            # for f in formats:
+            #     resolution = f.get('format_note') or f.get('height')
+            #     ext = f.get('ext')
+            #     filesize = f.get('filesize') or f.get('filesize_approx')
+
+            #     if isinstance(resolution, int):
+            #         resolution = f"{resolution}p"
+
+            #     if ext == 'mp4' and resolution in TARGET_RESOLUTIONS and f.get("vcodec") != 'none' and f.get("acodec") != 'none':
+            #         filtered_formats.append({
+            #             'format_id': f['format_id'],
+            #             'resolution': resolution,
+            #             'filesize': filesize,
+            #         })
 
             if not filtered_formats:
                 print("❌ No suitable formats found for the specified resolutions.")
                 return
+            
+            # Sort formats by resolution (best effort)
+            filtered_formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'].endswith('p') else 0)
+
 
             # Display available formats and file sizes
             print("\nAvailable video formats:")
             for i, fmt in enumerate(filtered_formats):
-                resolution = fmt.get('resolution', 'Unknown')
                 filesize = fmt.get('filesize')
-                print(f"{i + 1}. {resolution} - {format_size(filesize)}")
+                print(f"{i + 1}. {fmt['resolution']} - {format_size(filesize)} ({fmt['ext']})")
 
             # Ask user to select format
             try:
@@ -167,7 +187,7 @@ def download_video(url, retries=3):
                 'logger': MyLogger(),
                 'quiet': True,
                 'no_warnings': True,
-                'format': f"{selected_format['format_id']}+bestaudio/best",
+                'format': f"{selected_format['format_id']}+bestaudio/best" if '+bestaudio' not in selected_format['format_id'] else selected_format['format_id'],
                 'outtmpl': os.path.join(download_path, '%(title)s.%(ext)s'),
                 'progress_hooks': [progress_hook],
                 'merge_output_format': 'mp4',  # Ensure merged file format
