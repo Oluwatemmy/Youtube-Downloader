@@ -29,7 +29,7 @@ Always comply with YouTube's Terms of Service and only download videos you have 
 1.  **Clone the repository**
 
     ```bash
-    git clone [https://github.com/Oluwatemmy/Youtube-Downloader.git](https://github.com/Oluwatemmy/Youtube-Downloader.git)
+    git clone https://github.com/Oluwatemmy/Youtube-Downloader.git
     cd Youtube-Downloader
     ```
 
