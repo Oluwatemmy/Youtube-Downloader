@@ -124,23 +124,6 @@ def download_video(url, retries=3):
                         'filesize': filesize,
                         'ext': ext,
                     })
-            
-            # # Filter formats: only mp4 + common resolutions
-            # filtered_formats = []
-            # for f in formats:
-            #     resolution = f.get('format_note') or f.get('height')
-            #     ext = f.get('ext')
-            #     filesize = f.get('filesize') or f.get('filesize_approx')
-
-            #     if isinstance(resolution, int):
-            #         resolution = f"{resolution}p"
-
-            #     if ext == 'mp4' and resolution in TARGET_RESOLUTIONS and f.get("vcodec") != 'none' and f.get("acodec") != 'none':
-            #         filtered_formats.append({
-            #             'format_id': f['format_id'],
-            #             'resolution': resolution,
-            #             'filesize': filesize,
-            #         })
 
             if not filtered_formats:
                 print("❌ No suitable formats found for the specified resolutions.")
