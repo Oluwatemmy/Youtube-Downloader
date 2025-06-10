@@ -5,11 +5,9 @@
 # Always ensure you have permission to download content from YouTube before doing so.
 
 import yt_dlp
-import os
-import time
+import os, time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from queue import Queue
 import sys
 
 # Target resolutions
@@ -22,6 +20,7 @@ def thread_safe_print(*args, **kwargs):
     """Thread-safe print function to prevent garbled output."""
     with print_lock:
         print(*args, **kwargs)
+        sys.stdout.flush()  # Ensure output is flushed immediately, to support inline output
 
 class MyLogger:
     def __init__(self, thread_id=""):
@@ -149,7 +148,7 @@ def progress_hook_factory(thread_id):
     """
     def progress_hook(d):
         if d['status'] == 'downloading':
-            thread_safe_print(f"⬇️  [{thread_id}] Downloading: {d['_percent_str']} at {d['_speed_str']} ETA {d['_eta_str']}")
+            thread_safe_print(f"⬇️  [{thread_id}] Downloading: {d['_percent_str']} at {d['_speed_str']} ETA {d['_eta_str']}", end='\r')
     return progress_hook
 
 def handle_errors(e, attempt, retries, thread_id=""):
