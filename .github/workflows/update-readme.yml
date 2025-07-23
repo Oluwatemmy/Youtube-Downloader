@@ -1,0 +1,108 @@
+name: Update README with Latest Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Get latest release
+      id: release
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const release = await github.rest.repos.getLatestRelease({
+            owner: context.repo.owner,
+            repo: context.repo.repo
+          });
+          
+          core.setOutput('tag_name', release.data.tag_name);
+          core.setOutput('release_url', release.data.html_url);
+          core.setOutput('download_url', release.data.assets.find(asset => 
+            asset.name === 'YouTubeDownloader-Installer.zip'
+          )?.browser_download_url || '');
+          core.setOutput('portable_url', release.data.assets.find(asset => 
+            asset.name === 'YouTubeDownloader-Portable.zip'
+          )?.browser_download_url || '');
+    
+    - name: Update README with download links
+      run: |
+        cat > temp_readme.md << 'EOF'
+        # 🎥 YouTube Downloader Pro
+        
+        A high-performance YouTube video downloader with multiple interfaces (Desktop GUI, Web Browser, CLI) and advanced features.
+        
+        [![Release](https://img.shields.io/github/v/release/your-username/Youtube-Downloader?style=for-the-badge)](https://github.com/your-username/Youtube-Downloader/releases/latest)
+        [![Downloads](https://img.shields.io/github/downloads/your-username/Youtube-Downloader/total?style=for-the-badge)](https://github.com/your-username/Youtube-Downloader/releases)
+        [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+        
+        ## 🚀 Quick Download
+        
+        ### 🏆 Windows Installer (Recommended)
+        [![Download Installer](https://img.shields.io/badge/Download-Installer%20ZIP-blue?style=for-the-badge&logo=windows)](https://github.com/your-username/Youtube-Downloader/releases/latest/download/YouTubeDownloader-Installer.zip)
+        
+        **Best for most users** - Only 25 KB, works on any Windows system with Python
+        1. Download and extract ZIP
+        2. Run `YouTube Downloader.bat`  
+        3. Dependencies install automatically
+        4. Enjoy!
+        
+        ### ⚡ Portable Executable
+        [![Download Portable](https://img.shields.io/badge/Download-Portable%20EXE-green?style=for-the-badge&logo=windows)](https://github.com/your-username/Youtube-Downloader/releases/latest/download/YouTubeDownloader-Portable.zip)
+        
+        **No Python required** - Self-contained executable (~20 MB)
+        1. Download and extract ZIP
+        2. Run `YouTubeDownloader.exe`
+        3. Web interface launches if GUI unavailable
+        
+        ### 📱 All Releases
+        [![View All Releases](https://img.shields.io/badge/View-All%20Releases-purple?style=for-the-badge&logo=github)](https://github.com/your-username/Youtube-Downloader/releases)
+        
+        ---
+        
+        **⚠️ Educational Use Only**: Always comply with YouTube's Terms of Service and only download videos you have permission to download.
+        
+        EOF
+        
+        # Get the rest of the original README (features section onwards)
+        sed -n '/## 🛠️ Features/,$p' README.md >> temp_readme.md
+        
+        # Replace the original README
+        mv temp_readme.md README.md
+        
+        # Update download URLs with actual release URLs
+        if [ -n "${{ steps.release.outputs.download_url }}" ]; then
+          sed -i 's|https://github.com/your-username/Youtube-Downloader/releases/latest/download/YouTubeDownloader-Installer.zip|${{ steps.release.outputs.download_url }}|g' README.md
+        fi
+        
+        if [ -n "${{ steps.release.outputs.portable_url }}" ]; then
+          sed -i 's|https://github.com/your-username/Youtube-Downloader/releases/latest/download/YouTubeDownloader-Portable.zip|${{ steps.release.outputs.portable_url }}|g' README.md
+        fi
+        
+        # Update repository URLs (replace with actual repo)
+        REPO_URL="https://github.com/${{ github.repository }}"
+        sed -i "s|https://github.com/your-username/Youtube-Downloader|${REPO_URL}|g" README.md
+    
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add README.md
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "📝 Update README with latest release links (${{ steps.release.outputs.tag_name }})"
+          git push
+        fi
