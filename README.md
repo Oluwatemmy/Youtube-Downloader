@@ -36,7 +36,7 @@ A cross-platform desktop application for downloading YouTube videos with a moder
 ### Option 1: Run from Source
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/Youtube-Downloader.git
+git clone https://github.com/Oluwatemmy/Youtube-Downloader.git
 cd Youtube-Downloader
 
 # Install dependencies
@@ -46,7 +46,7 @@ pip install -r requirements.txt
 python youtube_downloader_gui.py
 ```
 
-### Option 2: Download Standalone Executable
+### Option 2: Download Standalone Executable (Coming Soon)
 Download the latest release for your platform:
 - **Windows**: `YouTubeDownloader.exe`
 - **macOS**: `YouTubeDownloader.app`
