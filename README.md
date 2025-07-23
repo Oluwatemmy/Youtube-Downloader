@@ -1,236 +1,216 @@
-# 🎥 YouTube Downloader Pro
+# YouTube Downloader Pro - GUI Version
 
-A high-performance YouTube video downloader with multiple interfaces (Desktop GUI, Web Browser, CLI) and advanced features.
+A cross-platform desktop application for downloading YouTube videos with a modern graphical user interface.
 
-[![Release](https://img.shields.io/github/v/release/your-username/Youtube-Downloader?style=for-the-badge)](https://github.com/your-username/Youtube-Downloader/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/your-username/Youtube-Downloader/total?style=for-the-badge)](https://github.com/your-username/Youtube-Downloader/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+## Features
 
-## 🚀 Quick Download
+### 🖥️ Cross-Platform GUI
+- **Windows**: Native executable (.exe)
+- **macOS**: App bundle (.app) 
+- **Linux**: Executable with optional AppImage
 
-### 🏆 Windows Installer (Recommended)
-[![Download Installer](https://img.shields.io/badge/Download-Installer%20ZIP-blue?style=for-the-badge&logo=windows)](https://github.com/your-username/Youtube-Downloader/releases/latest/download/YouTubeDownloader-Installer.zip)
+### ⚡ Performance Optimizations
+- Concurrent downloads (up to 10 simultaneous)
+- Async architecture for maximum efficiency
+- Smart caching system
+- Resume capability for interrupted downloads
+- Connection pooling for reduced overhead
 
-**Best for most users** - Only 25 KB, works on any Windows system with Python
-1. Download and extract ZIP
-2. Run `YouTube Downloader.bat`  
-3. Dependencies install automatically
-4. Enjoy!
-
-### ⚡ Portable Executable
-[![Download Portable](https://img.shields.io/badge/Download-Portable%20EXE-green?style=for-the-badge&logo=windows)](https://github.com/your-username/Youtube-Downloader/releases/latest/download/YouTubeDownloader-Portable.zip)
-
-**No Python required** - Self-contained executable (~20 MB)
-1. Download and extract ZIP
-2. Run `YouTubeDownloader.exe`
-3. Web interface launches if GUI unavailable
-
-### 📱 All Releases
-[![View All Releases](https://img.shields.io/badge/View-All%20Releases-purple?style=for-the-badge&logo=github)](https://github.com/your-username/Youtube-Downloader/releases)
-
----
-
-**⚠️ Educational Use Only**: Always comply with YouTube's Terms of Service and only download videos you have permission to download.
-
-## 🛠️ Features
-
-### 🖥️ Multiple Interfaces
-* **Desktop GUI** - Native Windows interface with drag & drop
-* **Web Browser** - Modern interface accessible at http://127.0.0.1:5000  
-* **Enhanced CLI** - Terminal interface with async downloads
-* **Auto-detection** - Automatically selects best available interface
-
-### ⚡ High Performance
-* **5-10x faster** downloads via async architecture
-* **50+ concurrent downloads** supported
-* **Resume capability** for interrupted downloads
-* **Smart caching** and duplicate detection
-* **Connection pooling** reduces network overhead
+### 🎯 User-Friendly Interface
+- Drag & drop URL input
+- Download queue management
+- Real-time progress tracking
+- Settings persistence
+- Batch download support
+- Playlist download support
 
 ### 📊 Advanced Features
-* **Multiple video qualities** - 360p to 4K support
-* **Batch downloads** - Handle multiple videos efficiently
-* **Playlist support** - Download entire YouTube playlists
-* **Real-time progress** - Speed, ETA, and progress tracking
-* **Queue management** - Add, remove, prioritize downloads
-* **Settings persistence** - Remembers your preferences
+- Multiple video quality options (360p to 4K)
+- Video description saving
+- Smart duplicate detection
+- Detailed download statistics
+- Error handling and retry logic
 
-## 📦 Installation Options
+## Installation
 
-### 🏆 Option 1: Windows Installer (Recommended)
-**Easiest method - works on any Windows system with Python**
-
-1. **Download installer**: `YouTubeDownloader-Installer.zip` 
-2. **Extract** to any folder (e.g., Desktop)
-3. **Run** `YouTube Downloader.bat`
-4. **First time**: Dependencies install automatically
-5. **Launch**: Application starts with best available interface
-
-### 🔧 Option 2: Build Windows Executable
-**For creating standalone .exe file**
-
+### Option 1: Run from Source
 ```bash
 # Clone repository
 git clone https://github.com/your-repo/Youtube-Downloader.git
 cd Youtube-Downloader
 
-# Run build script
+# Install dependencies
+pip install -r requirements.txt
+
+# Run GUI
+python youtube_downloader_gui.py
+```
+
+### Option 2: Download Standalone Executable
+Download the latest release for your platform:
+- **Windows**: `YouTubeDownloader.exe`
+- **macOS**: `YouTubeDownloader.app`
+- **Linux**: `YouTubeDownloader` or `YouTubeDownloader.AppImage`
+
+## Building Standalone Executables
+
+### Windows
+```bash
+# Run the build script
 build_windows.bat
 
-# Find executable in dist/YouTubeDownloader.exe
+# Or manually with PyInstaller
+pip install pyinstaller
+pyinstaller youtube_downloader.spec
 ```
 
-### 💻 Option 3: Run from Source
-
-1.  **Clone the repository**
-
-    ```bash
-    git clone https://github.com/Oluwatemmy/Youtube-Downloader.git
-    cd Youtube-Downloader
-    ```
-
-2.  **Create a virtual environment (recommended)**
-
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
-
-3.  **Install dependencies**
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-## 🔧 Installing ffmpeg
-
-This script requires `ffmpeg` to merge audio and video streams. Follow the instructions below for your operating system:
-
-**Windows:**
-
-1.  Download the latest stable build from [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html).
-2.  Extract the ZIP file to a location on your computer (e.g., `C:\ffmpeg`).
-3.  Add the `bin\` folder inside the extracted directory to your system's `PATH` environment variable.
-4.  Verify the installation by opening a new command prompt and running:
-
-    ```bash
-    ffmpeg -version
-    ```
-
-**macOS (with Homebrew):**
-
-1.  If you don't have Homebrew installed, you can install it from [https://brew.sh/](https://brew.sh/).
-2.  Open your terminal and run:
-
-    ```bash
-    brew install ffmpeg
-    ```
-
-**Ubuntu/Linux:**
-
-1.  Open your terminal and run:
-
-    ```bash
-    sudo apt update
-    sudo apt install ffmpeg
-    ```
-
-## 🚀 Usage
-
-### Quick Start
-After installation, the application automatically detects the best interface:
-
-1. **Desktop GUI** (if tkinter available) - Full-featured native interface
-2. **Web Browser** (fallback) - Opens at http://127.0.0.1:5000  
-3. **Enhanced CLI** (fallback) - Terminal-based with all features
-
-### Interface Options
+### macOS
 ```bash
-# Auto-detect best interface
-python youtube_downloader_safe.py
+# Make script executable and run
+chmod +x build_macos.sh
+./build_macos.sh
 
-# Force specific interface  
-python youtube_downloader_gui.py    # Desktop GUI
-python youtube_downloader_web.py    # Web interface
-python yt_dlp_enhanced.py          # Enhanced CLI
+# Creates YouTubeDownloader.app in dist/
 ```
 
-Downloaded files are saved to `downloads/` folder (configurable in settings).
-
-## 🔨 Creating Windows Installer
-
-### For Developers - Create Installer Package
+### Linux
 ```bash
-# Create the installer ZIP for distribution
-python create_installer.py
+# Make script executable and run
+chmod +x build_linux.sh
+./build_linux.sh
 
-# This creates: YouTubeDownloader-Installer.zip
-# Share this file with end users
+# Creates executable in dist/
 ```
 
-### For Developers - Build Executable  
-```bash
-# Create standalone .exe file
-build_windows.bat
+## Usage
 
-# This creates: dist/YouTubeDownloader.exe
-# Note: May have tkinter issues, installer method is more reliable
+### Basic Usage
+1. **Launch** the application
+2. **Enter URLs** in the text area (one per line)
+3. **Configure settings** (download directory, quality, concurrent downloads)
+4. **Click "Add to Queue"** to add videos
+5. **Click "Start Download"** to begin downloading
+
+### Advanced Features
+
+#### Batch Downloads
+- Enter multiple URLs (one per line)
+- Supports YouTube playlists
+- Queue management with progress tracking
+
+#### Settings
+- **Download Directory**: Choose where to save videos
+- **Video Quality**: Select from 360p to 4K (or "best")
+- **Concurrent Downloads**: Adjust simultaneous downloads (1-10)
+- **Save Descriptions**: Option to save video descriptions as text files
+
+#### Queue Management
+- **Start/Stop**: Control download process
+- **Clear Completed**: Remove finished downloads from queue
+- **Clear All**: Empty the entire queue
+- **Progress Tracking**: Real-time status and progress bars
+
+## System Requirements
+
+### Minimum Requirements
+- **OS**: Windows 10+, macOS 10.14+, or Linux (Ubuntu 18.04+)
+- **RAM**: 4GB (8GB recommended for large batches)
+- **Storage**: 100MB for application + space for downloads
+- **Network**: Internet connection
+
+### Dependencies (for source)
+- Python 3.8+
+- tkinter (usually included with Python)
+- yt-dlp
+- aiohttp
+- aiofiles
+- tqdm
+
+### External Dependencies
+- **FFmpeg**: Required for video processing (auto-installed by yt-dlp)
+
+## Performance Tips
+
+### For Best Performance
+1. **Use SSD storage** for download directory
+2. **Increase concurrent downloads** (3-5 for fast internet)
+3. **Use wired connection** when possible
+4. **Close other bandwidth-heavy applications**
+
+### Troubleshooting
+
+#### Common Issues
+1. **"FFmpeg not found"**
+   - Solution: yt-dlp will auto-install FFmpeg on first use
+
+2. **Downloads fail with network errors**
+   - Solution: Reduce concurrent downloads, check internet connection
+
+3. **GUI doesn't start**
+   - Solution: Ensure all dependencies are installed, try running from command line
+
+4. **Slow downloads**
+   - Solution: Check internet speed, reduce concurrent downloads, try different quality
+
+#### Error Reporting
+If you encounter issues:
+1. Check error messages in the status bar
+2. Try downloading a single video first
+3. Verify the YouTube URL is valid and accessible
+
+## Legal Notice
+
+⚠️ **Important**: This tool is for educational purposes only. 
+
+- Always respect YouTube's Terms of Service
+- Only download videos you have permission to download
+- Respect copyright laws in your jurisdiction
+- Do not distribute copyrighted content without permission
+
+## Development
+
+### Project Structure
+```
+Youtube-Downloader/
+├── youtube_downloader_gui.py    # Main GUI application
+├── yt_dlp_enhanced.py          # Enhanced backend downloader
+├── yt-dlp_downloader.py        # Original CLI version
+├── youtube_downloader.spec     # PyInstaller spec file
+├── build_windows.bat           # Windows build script
+├── build_macos.sh             # macOS build script
+├── build_linux.sh             # Linux build script
+├── create_icon.py             # Icon creation utility
+└── requirements.txt           # Python dependencies
 ```
 
-## 🧠 How It Works
-1. **User Input:** The script prompts the user for a YouTube video or playlist URL and a desired resolution.
-2. **Video Information:** It uses `yt-dlp` to fetch video information, including available formats and the best resolution without downloading the actual content initially.
-3. **List available Resolutions:** The script lists available resolutions and allows the user to select one.
-5. **Resolution Selection:** The user selects their preferred resolution from the provided list.
-6. **Duplicate Check:** The script checks if the video has already been downloaded by comparing the video ID with existing files in the `downloads/` directory.
-7. **Download:** If the video hasn't been downloaded, it uses `yt-dlp` to download the video in the selected resolution and save it in the `downloads/` directory.
-8. **Progress Display:** The script displays the download progress, including speed and estimated time of arrival (ETA).
-9. **Error Handling:** If an error occurs during the download, the script retries the download up to 3 times before giving up.
-10. **Completion Message:** Once the download is complete, the script informs the user and provides the path to the downloaded file.
-11. **Exit:** The script exits after the download is complete.
+### Contributing
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Test on multiple platforms
+5. Submit a pull request
 
-## Output
-Downloads are saved to:
-```bash
-<your-project-root>/downloads/
-```
-The filenames are cleaned to remove invalid characters, ensuring they are readable and compatible with most operating systems.
+## License
 
-## ❗ Troubleshooting
-### ffmpeg not found?
-Make sure:
-* `ffmpeg` is installed correctly to your system.
-* The `bin` directory of `ffmpeg` is added to your system's `PATH` environment variable(for Windows).
-* Restart your terminal or command prompt after making changes to the `PATH` variable.
-* If you still encounter issues, try running `ffmpeg -version` in your terminal to verify the installation.
-### yt-dlp not found?
-Make sure:
-* `yt-dlp` is installed correctly in your Python environment.
-* You can check if `yt-dlp` is installed by running `yt-dlp --version` in your terminal.
-* If you see an error, try reinstalling `yt-dlp` using `pip install -U yt-dlp`.
-### Error during download?
-The script includes basic error handling and will attempt retries automatically in some cases. 
-Common issues include:
-* `Network connectivity problems:` Check your internet connection and try again.
-* `Invalid URL:` Ensure the URL you provided is correct and accessible.
-* `Video unavailable:` The video may have been removed or set to private. Try a different URL.
-* `Age-restricted content:` Some videos may be age-restricted. You may need to log in to your YouTube account to access them. You can do this by providing your cookies file using the `--cookies` option in `yt-dlp`.
-*`Outdated yt-dlp version:` Ensure you have the latest version of `yt-dlp` installed. You can update it using:
-```bash
-pip install -U yt-dlp
-```
-If you encounter persistent errors, please check the yt-dlp documentation or issue tracker for potential solutions.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🤝 Contributing
-Contributions are welcome! If you find a bug or have a feature request, please open an issue or submit a pull request.
-Please ensure your code adheres to the existing style and includes appropriate tests.
+## Changelog
 
-## 📄 License
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+### Version 1.0.0
+- Initial GUI release
+- Cross-platform support
+- Async download engine
+- Queue management
+- Settings persistence
+- Standalone executables
 
-## 🛡️ Disclaimer
-This tool is intended for educational purposes only. Downloading copyrighted material without permission is illegal and violates YouTube's Terms of Service. Please use this script responsibly and only download videos that you have the right to access and save. The developers are not responsible for any misuse of this tool.
+## Support
 
-## 👤 Author
+For support and questions:
+- Open an issue on GitHub
+- Check the troubleshooting section
+- Verify you're using the latest version
 
-**Oluwaseyi Ajayi** - [GitHub](https://github.com/Oluwatemmy) | [Twitter](https://twitter.com/Oluwatemmy15) | [LinkedIn](https://www.linkedin.com/in/aotem11/) | [Portfolio](https://oluwatemmy.netlify.app/)
+---
+
+**Made with ❤️ for the open source community**
