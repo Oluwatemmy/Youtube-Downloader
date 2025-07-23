@@ -123,7 +123,7 @@ jobs:
       shell: powershell
     
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: release-files
         path: |
@@ -257,7 +257,7 @@ jobs:
         zip -r YouTubeDownloader-CrossPlatform.zip cross-platform/
     
     - name: Upload cross-platform artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: cross-platform
         path: YouTubeDownloader-CrossPlatform.zip
