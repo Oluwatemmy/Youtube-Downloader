@@ -2,66 +2,70 @@
 echo YouTube Downloader Pro - Windows Build Script
 echo ==============================================
 
-REM Check if Python is available
-python --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo ERROR: Python not found! Please install Python from https://python.org
-    pause
-    exit /b 1
+REM Check Python version
+for /f "tokens=2" %%i in ('python --version 2^>^&1') do set PYTHON_VERSION=%%i
+echo Python version: %PYTHON_VERSION%
+
+REM Check if Python 3.13
+echo %PYTHON_VERSION% | findstr "3.13" >nul
+if %ERRORLEVEL% EQU 0 (
+    echo.
+    echo WARNING: Python 3.13 detected!
+    echo Python 3.13 has compatibility issues with some packages.
+    echo.
+    echo RECOMMENDED SOLUTIONS:
+    echo 1. Use Python 3.12 instead
+    echo 2. Use the source distribution method below
+    echo.
+    echo Attempting build anyway...
+    echo.
 )
 
-echo Python found. Starting build process...
+REM Create source distribution instead of exe
+echo Creating source distribution...
+python create_source_installer.py
+if %ERRORLEVEL% EQU 0 (
+    echo.
+    echo SUCCESS: Source installer created!
+    echo File: YouTubeDownloader-Installer.zip
+    echo.
+    echo This works on ALL Python versions and is more reliable.
+    echo Users just run the .bat file included in the zip.
+    echo.
+    pause
+    exit /b 0
+)
+
+REM Fallback to PyInstaller if source method fails
 echo.
+echo Attempting PyInstaller build...
 
-REM Kill any running instances
-taskkill /f /im YouTubeDownloader.exe 2>nul
+REM Try installing with no-deps to avoid ctypes issues
+python -m pip install --no-deps pyinstaller
+python -m pip install altgraph
 
-REM Clean previous builds
-echo Cleaning previous builds...
-if exist dist rmdir /s /q dist 2>nul
-if exist build rmdir /s /q build 2>nul
-
-REM Install dependencies
-echo Installing build dependencies...
-python -m pip install pyinstaller --quiet --disable-pip-version-check
-if %ERRORLEVEL% NEQ 0 (
-    echo ERROR: Failed to install PyInstaller
-    pause
-    exit /b 1
-)
-
-REM Build executable (simple approach)
-echo Building executable...
+REM Simple build without complex dependencies
 pyinstaller ^
     --onefile ^
     --console ^
     --name YouTubeDownloader ^
-    --add-data "yt_dlp_enhanced.py;." ^
-    --add-data "youtube_downloader_gui.py;." ^
-    --add-data "youtube_downloader_web.py;." ^
+    --hidden-import=yt_dlp ^
+    --collect-all=yt_dlp ^
     youtube_downloader_safe.py
 
-REM Check if build succeeded
 if exist "dist\YouTubeDownloader.exe" (
     echo.
-    echo SUCCESS: Build completed!
-    echo Executable: dist\YouTubeDownloader.exe
-    
-    REM Get file size
-    for %%F in ("dist\YouTubeDownloader.exe") do (
-        set /a size=%%~zF/1048576
-        echo Size: !size! MB
-    )
-    
-    echo.
-    echo The executable automatically falls back to web interface if GUI is unavailable.
-    echo This ensures it works on all systems.
-    
+    echo SUCCESS: Executable created!
+    echo File: dist\YouTubeDownloader.exe
 ) else (
     echo.
-    echo ERROR: Build failed! No executable found.
-    echo Check the output above for error messages.
+    echo BUILD FAILED: Creating fallback batch launcher...
+    echo.
+    echo @echo off > YouTubeDownloader.bat
+    echo python youtube_downloader_safe.py %%* >> YouTubeDownloader.bat
+    echo.
+    echo Created: YouTubeDownloader.bat
+    echo This batch file will work as a launcher.
 )
 
-echo.
 pause

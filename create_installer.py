@@ -94,9 +94,9 @@ if %ERRORLEVEL% NEQ 0 (
 )
 '''
     
-    with open(installer_dir / "YouTube Downloader.bat", "w") as f:
+    with open(installer_dir / "YouTube-Downloader.bat", "w") as f:
         f.write(launcher_content)
-    print("  [OK] YouTube Downloader.bat")
+    print("  [OK] YouTube-Downloader.bat")
     
     print("\nStep 3: Creating installation instructions...")
     
@@ -111,7 +111,7 @@ REQUIREMENTS:
 
 INSTALLATION:
 1. Extract this ZIP to a folder
-2. Double-click "YouTube Downloader.bat"
+2. Double-click "YouTube-Downloader.bat"
 3. First run will install dependencies automatically
 4. Application will launch with best available interface
 
@@ -169,7 +169,7 @@ Check TROUBLESHOOTING.md for common issues and solutions.
     print()
     print("DISTRIBUTION:")
     print("1. Share the ZIP file with users")
-    print("2. Users extract and run 'YouTube Downloader.bat'")
+    print("2. Users extract and run 'YouTube-Downloader.bat'")
     print("3. First run installs dependencies automatically")
     print("4. Application launches with automatic interface detection")
     print()
