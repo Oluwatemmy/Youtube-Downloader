@@ -1,29 +1,32 @@
-# YouTube Downloader Pro
+# YouTube Downloader Pro - Enhanced Edition
 
-**High-performance YouTube downloader with multiple interfaces and 5-10x faster download speeds**
+**Modern YouTube downloader with enhanced GUI, analytics, and playlist support**
 
 ## ✨ Features
 
-### 🚀 **High Performance**
-- **5-10x faster downloads** via async architecture
-- **50+ concurrent downloads** supported
-- **Connection pooling** and session reuse
-- **Smart caching system** for metadata
+### 🚀 **Enhanced Performance**
+- **Async download architecture** for optimal speeds
+- **Smart format fallback chain** for maximum compatibility
 - **Resume capability** for interrupted downloads
+- **Concurrent download support** with configurable limits
+- **Progress tracking** with real-time speed and ETA
 
-### 🖥️ **Multiple Interfaces**
-- **Desktop GUI** - Modern tkinter interface
-- **Web Browser** - Responsive HTML interface  
-- **Enhanced CLI** - Rich terminal interface
-- **Basic CLI** - Universal fallback
+### 🖥️ **Modern GUI Interface**
+- **Streamlined single-tab design** - All features in one place
+- **Integrated playlist support** - Load entire playlists directly to queue
+- **Real-time progress visualization** with progress bars and status updates
+- **Advanced queue management** - Filter, sort, and control downloads
+- **Persistent settings** with user preferences saved automatically
+- **Analytics dashboard** - Track download statistics and history
 
 ### 🎯 **Smart Features**
-- **Auto-interface detection** - Always provides working UI
-- **Batch downloads** and playlist support
-- **Real-time progress** tracking with speed/ETA
-- **Quality selection** (360p to 4K)
+- **Automatic URL validation** with visual feedback
+- **Playlist expansion** - Automatically adds all videos from playlists
+- **Quality selection** (360p to 4K, best, worst)
 - **Description saving** and metadata extraction
-- **Duplicate detection** and error handling
+- **Duplicate detection** prevents re-downloading
+- **Context menu** for queue management (remove, retry, open location)
+- **Session tracking** with persistent analytics storage
 
 ## 📦 Installation
 
@@ -36,77 +39,83 @@ cd Youtube-Downloader
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the application
-python youtube_downloader_safe.py
+# Run the GUI application
+python youtube_downloader_gui.py
+```
+
+### Quick Launch
+```bash
+# Use the launcher script (Windows)
+run_youtube_downloader.bat
+
+# Or launch directly
+python laucher.py
 ```
 
 ## 🚀 Usage
 
 ### Quick Start
-1. **Launch** the application: `python youtube_downloader_safe.py`
-2. **Interface auto-detection**:
-   - Desktop GUI opens if available
-   - Web browser opens if GUI fails
-   - Enhanced CLI if web fails
-   - Basic CLI as last resort
-3. **Enter YouTube URLs** (supports playlists)
-4. **Choose quality and settings**
-5. **Start downloading**
+1. **Launch** the application: `python youtube_downloader_gui.py`
+2. **Enter URLs**:
+   - Single video URL in the Quick Add field
+   - Multiple URLs in the Batch Add section
+   - Playlist URLs automatically expand to include all videos
+3. **Configure settings** in the Settings tab (quality, download location, etc.)
+4. **Start downloading** - Monitor progress in real-time
+5. **View analytics** - Track your download history and statistics
 
-### Interface Options
+### Main Interface Features
 
-#### 🖥️ Desktop GUI
-- Modern tkinter interface
-- Drag & drop URL input
-- Real-time progress bars
-- Queue management
-- Settings persistence
+#### 🔗 **URL Input Section**
+- **Quick Add**: Single URL input with real-time validation
+- **Batch Add**: Multi-line text area for multiple URLs
+- **Playlist Support**: Direct playlist URL input with automatic expansion
+- **Auto-load**: Automatically loads video information when enabled
 
-Run directly: `python youtube_downloader_gui.py`
+#### 📋 **Download Queue & Progress**
+- **Integrated queue and progress** - Everything in one view
+- **Real-time progress bars** for overall and current download
+- **Queue filtering** - View all, pending, or completed downloads
+- **Status tracking** - Visual status indicators for each video
+- **Queue management** - Start, pause, stop, clear operations
 
-#### 🌐 Web Interface
-- Runs in your browser (localhost:8080)
-- Responsive design
-- Works on any system
-- No GUI dependencies required
+#### ⚙️ **Settings Tab**
+- **Download folder** selection with browse button
+- **Video quality** options (best to worst, specific resolutions)
+- **Concurrent downloads** configuration (1-10 simultaneous)
+- **Behavior settings** - Auto-load info, save descriptions
+- **Advanced options** - Retry attempts, timeout settings
 
-Run directly: `python youtube_downloader_web.py`
-
-#### 💻 Enhanced CLI
-- Rich terminal interface with colors
-- Real-time progress bars
-- Batch processing support
-- Interactive prompts
-
-Run directly: `python yt_dlp_enhanced.py`
-
-#### ⌨️ Basic CLI
-- Universal fallback
-- Works on any system
-- Simple text-based interface
-
-Run directly: `python yt-dlp_downloader.py`
+#### 📊 **Analytics Tab**
+- **Download statistics** - Total, successful, failed downloads
+- **Data tracking** - Monitor total data downloaded
+- **Session analytics** - Current session statistics
+- **Recent activity** - Real-time activity log
+- **Export/import** - Save analytics data
+- **History management** - Clear or export download history
 
 ## 🔧 Advanced Features
 
-### Performance Optimization
-- **Concurrent downloads**: Up to 50 simultaneous
-- **Connection pooling**: Reduced overhead
-- **Smart caching**: Faster metadata retrieval
-- **Resume downloads**: Continue interrupted transfers
-- **Chunk optimization**: Adaptive download segments
+### Queue Management
+- **Context menu**: Right-click queue items for options
+- **Remove selected**: Remove unwanted downloads
+- **Retry failed**: Retry failed downloads
+- **Open location**: Navigate to downloaded files
+- **Copy URL**: Copy original video URL
+- **Filter by status**: Show specific types of downloads
 
-### Quality Options
-- **Best available**: Automatically selects highest quality
-- **4K/2K/1080p/720p/480p/360p**: Manual selection
-- **Audio-only**: MP3 extraction
-- **Format selection**: Video + audio combining
+### Playlist Features
+- **Automatic detection**: Recognizes playlist URLs
+- **Bulk adding**: Adds all playlist videos to queue
+- **Smart duplicate handling**: Prevents re-adding existing videos
+- **Metadata preservation**: Maintains uploader, duration, and view count info
 
-### Batch Processing
-- **Multiple URLs**: One per line input
-- **Playlist support**: Entire YouTube playlists
-- **Queue management**: Add, remove, prioritize
-- **Progress tracking**: Individual and overall progress
+### Analytics & Tracking
+- **Persistent storage**: Analytics saved between sessions
+- **Export capability**: Save analytics as JSON
+- **Session tracking**: Monitor current session performance
+- **Activity logging**: Timestamped activity feed
+- **Data visualization**: Progress tracking and statistics
 
 ## 📋 System Requirements
 
@@ -120,10 +129,8 @@ Run directly: `python yt-dlp_downloader.py`
 ### Dependencies
 - Python 3.8+
 - tkinter (usually included with Python)
-- yt-dlp
-- aiohttp
-- aiofiles
-- tqdm
+- yt-dlp (latest version)
+- Standard library modules (threading, queue, json, pathlib, etc.)
 
 Install dependencies: `pip install -r requirements.txt`
 
@@ -133,35 +140,37 @@ Install dependencies: `pip install -r requirements.txt`
 ```
 Youtube-Downloader/
 ├── Core Application
-│   ├── youtube_downloader_safe.py     # Main launcher with auto-detection
-│   ├── youtube_downloader_gui.py      # Desktop GUI interface
-│   ├── youtube_downloader_web.py      # Web browser interface
-│   ├── yt_dlp_enhanced.py            # Enhanced CLI + async backend
-│   └── yt-dlp_downloader.py          # Original CLI version
+│   ├── youtube_downloader_gui.py      # Main GUI application
+│   ├── yt_dlp_enhanced.py            # Enhanced download backend
+│   ├── yt-dlp_downloader.py          # Basic CLI version
+│   └── laucher.py                    # Application launcher
 ├── Build & Distribution
-│   ├── create_installer.py           # Creates source installer ZIP
+│   ├── create_installer.py           # Creates installer package
 │   ├── build_windows.bat            # Builds Windows executable
+│   ├── run_youtube_downloader.bat   # Windows launcher script
 │   ├── test_build.py                # Build validation tests
 │   └── version.py                   # Version management
-├── Web Interface
-│   └── templates/
-│       └── index.html              # Web UI template
+├── Resources
+│   ├── templates/
+│   │   └── index.html              # Web UI template (legacy)
+│   └── create_icon.py             # Icon generation utility
 ├── Documentation
 │   ├── README.md                   # This file
 │   ├── LICENSE                     # MIT license
 │   └── requirements.txt           # Python dependencies
-└── Utilities
-    └── create_icon.py             # Icon generation
+└── Downloads
+    ├── downloads/                 # Default download directory
+    └── test_downloads/           # Test download directory
 ```
 
-### Building Windows Executable (Optional)
+### Building Windows Executable
 ```bash
 # Build standalone executable
 build_windows.bat
-# Creates: dist/YouTubeDownloader.exe
+# Creates: dist/YouTubeDownloader.exe (if PyInstaller available)
 ```
 
-### Creating Source Package (Optional)
+### Creating Installer Package
 ```bash
 # Create installer package
 python create_installer.py
@@ -177,11 +186,11 @@ cd Youtube-Downloader
 # Install dependencies
 pip install -r requirements.txt
 
-# Run different interfaces
-python youtube_downloader_safe.py    # Auto-detection
-python youtube_downloader_gui.py     # Force GUI
-python youtube_downloader_web.py     # Force web
-python yt_dlp_enhanced.py           # Force CLI
+# Run the main application
+python youtube_downloader_gui.py
+
+# Or use the launcher
+python laucher.py
 ```
 
 ## 🆘 Troubleshooting
@@ -194,92 +203,80 @@ python yt_dlp_enhanced.py           # Force CLI
 - **macOS**: `brew install python3`
 
 #### "tkinter not available"
-- Application automatically falls back to web interface
-- Web interface works on 100% of systems
-- No action required from user
+- **Linux**: `sudo apt install python3-tk`
+- **Most systems**: tkinter comes with Python by default
 
 #### "ModuleNotFoundError"
 - Install dependencies: `pip install -r requirements.txt`
-- Ensure Python 3.8+ is installed
+- Ensure Python 3.8+ is installed: `python --version`
 
 ### Runtime Issues
 
 #### Downloads fail
 - Check internet connection
-- Verify YouTube URL is accessible
-- Try reducing concurrent downloads
+- Verify YouTube URL is accessible in browser
+- Try reducing concurrent downloads in Settings
 - Check available disk space
+- Update yt-dlp: `pip install --upgrade yt-dlp`
 
 #### GUI doesn't start
-- Application automatically tries web interface
-- Check browser opens on localhost:8080
-- Try running manually: `python youtube_downloader_web.py`
+- Check Python version: `python --version` (need 3.8+)
+- Verify tkinter: `python -c "import tkinter"`
+- Try running with: `python -u youtube_downloader_gui.py`
 
 #### Slow performance
-- Increase concurrent downloads in settings
+- Increase concurrent downloads in Settings tab
 - Use SSD for download directory
-- Check internet speed
+- Check internet connection speed
 - Close bandwidth-heavy applications
 
+#### Progress not updating
+- Check if downloads folder has write permissions
+- Verify sufficient disk space available
+- Check Windows Defender/antivirus isn't blocking
+
 ### Getting Help
-1. **Check error messages** in the application
-2. **Try different interface** (auto-fallback usually works)
+1. **Check error messages** in the application status bar
+2. **View recent activity** in the Analytics tab
 3. **Verify system requirements** are met
-4. **Run test build**: `python test_build.py`
-5. **Report issues** on GitHub with error details
+4. **Run validation**: `python test_build.py`
+5. **Report issues** on GitHub with error details and system info
 
 ## 🔒 Legal Notice
 
-⚠️ **Important**: This tool is for educational purposes only.
+⚠️ **Important**: This tool is for educational and personal use only.
 
 - Always respect YouTube's Terms of Service
 - Only download videos you have permission to download
 - Respect copyright laws in your jurisdiction
 - Do not distribute copyrighted content without permission
-
-## 📈 Performance Benchmarks
-
-### Speed Improvements
-- **Traditional downloaders**: ~1-2 Mbps
-- **YouTube Downloader Pro**: ~10-50 Mbps
-- **Improvement**: 5-10x faster on typical connections
-
-### Concurrency Tests
-- **Single download**: 100% baseline
-- **5 concurrent**: 400% throughput
-- **10 concurrent**: 650% throughput  
-- **20+ concurrent**: 800% throughput
-
-### Compatibility Tests
-- **Source installation**: 100% success rate
-- **GUI interface**: ~95% success rate
-- **Web interface fallback**: 100% success rate
+- The developers are not responsible for misuse of this software
 
 ## 🏆 Why Choose This Downloader?
 
-### ✅ **Reliability**
-- Multiple interface fallbacks
-- Automatic error recovery
-- Resume interrupted downloads
-- Works on any system
+### ✅ **Modern Interface**
+- Clean, intuitive GUI design
+- Real-time progress visualization
+- Integrated playlist support
+- Comprehensive analytics dashboard
 
-### ✅ **Performance**  
-- Async architecture
-- Connection pooling
-- Smart caching
-- 5-10x speed improvement
+### ✅ **Reliability**
+- Robust error handling and recovery
+- Resume interrupted downloads
+- Multiple format fallback options
+- Comprehensive logging and debugging
+
+### ✅ **Performance**
+- Async download architecture
+- Configurable concurrent downloads
+- Smart format selection
+- Efficient progress tracking
 
 ### ✅ **User Experience**
-- Auto-interface detection
-- Professional GUI
-- Web browser backup
-- Clear progress tracking
-
-### ✅ **Professional Quality**
-- Comprehensive testing
-- Professional documentation
-- Active maintenance
-- Multiple interface options
+- Single-tab streamlined design
+- Persistent settings and preferences
+- Context menus and keyboard shortcuts
+- Comprehensive help and documentation
 
 ## 🤝 Contributing
 
@@ -289,17 +286,25 @@ python yt_dlp_enhanced.py           # Force CLI
 4. Submit pull request with clear description
 
 ### Development Guidelines
-- Follow existing code style
-- Test on multiple platforms
-- Update documentation
-- Add tests for new features
+- Follow existing code style and structure
+- Test on multiple platforms when possible
+- Update documentation for new features
+- Ensure backward compatibility
+- Add appropriate error handling
+
+### Code Structure
+- **youtube_downloader_gui.py**: Main GUI application with all interface logic
+- **yt_dlp_enhanced.py**: Download backend with async support
+- **VideoInfo class**: Data structure for video metadata
+- **Analytics system**: Persistent tracking and reporting
 
 ## 📞 Support
 
 For support and questions:
 - **GitHub Issues**: Report bugs and feature requests
-- **Documentation**: Check troubleshooting section
+- **Documentation**: Check troubleshooting section first
 - **Testing**: Run `python test_build.py` to validate setup
+- **Community**: Share experiences and solutions
 
 ## 📄 License
 
@@ -307,6 +312,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**🚀 Professional YouTube downloading with enterprise-grade reliability and performance!**
+**🚀 Enhanced YouTube downloading with modern GUI, analytics, and streamlined workflow!**
 
-Made with ❤️ for the open source community
+Made with ❤️ for content creators and media enthusiasts
