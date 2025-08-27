@@ -49,7 +49,7 @@ python youtube_downloader_gui.py
 run_youtube_downloader.bat
 
 # Or launch directly
-python laucher.py
+python launcher.py
 ```
 
 ## 🚀 Usage
@@ -143,7 +143,7 @@ Youtube-Downloader/
 │   ├── youtube_downloader_gui.py      # Main GUI application
 │   ├── yt_dlp_enhanced.py            # Enhanced download backend
 │   ├── yt-dlp_downloader.py          # Basic CLI version
-│   └── laucher.py                    # Application launcher
+│   └── launcher.py                   # Application launcher
 ├── Build & Distribution
 │   ├── create_installer.py           # Creates installer package
 │   ├── build_windows.bat            # Builds Windows executable
@@ -190,7 +190,7 @@ pip install -r requirements.txt
 python youtube_downloader_gui.py
 
 # Or use the launcher
-python laucher.py
+python launcher.py
 ```
 
 ## 🆘 Troubleshooting
