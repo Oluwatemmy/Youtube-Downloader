@@ -219,9 +219,30 @@ def progress_hook_factory(thread_id):
     """
 
     def progress_hook(d):
-        if d["status"] == "downloading":
-            message = f"⬇️  [{thread_id}] Downloading: {d['_percent_str']} at {d['_speed_str']} ETA {d['_eta_str']}"
-            update_progress_line(thread_id, message)
+        try:
+            if d["status"] == "downloading":
+                percent = d.get("_percent_str", "N/A")
+                speed = d.get("_speed_str", "N/A")
+                eta = d.get("_eta_str", "N/A")
+                message = f"⬇️  [{thread_id}] Downloading: {percent} at {speed} ETA {eta}"
+
+                if thread_id in thread_progress:
+                    update_progress_line(thread_id, message)
+                else:
+                    # Single video mode: print progress on same line
+                    with print_lock:
+                        print(f"\r{message:<90}", end="", flush=True)
+
+            elif d["status"] == "finished":
+                message = f"✅ [{thread_id}] Merging formats..."
+                if thread_id in thread_progress:
+                    update_progress_line(thread_id, message)
+                else:
+                    with print_lock:
+                        print(f"\r{message:<90}", end="", flush=True)
+                        print()  # newline after completion
+        except Exception:
+            pass
 
     return progress_hook
 
@@ -381,8 +402,15 @@ def download_video_threaded(
                 ),
                 "outtmpl": os.path.join(download_path, "%(title)s.%(ext)s"),
                 "progress_hooks": [progress_hook_factory(thread_id)],
-                "merge_output_format": "mp4",  # Ensure merged file format
-                "ignoreerrors": True,  # Skip bad videos
+                "merge_output_format": "mp4",
+                "keepvideo": False,
+                "postprocessors": [
+                    {
+                        "key": "FFmpegVideoRemuxer",
+                        "preferedformat": "mp4",
+                    }
+                ],
+                "ignoreerrors": True,
             }
 
             # Download the video with the selected format
@@ -523,8 +551,15 @@ def download_video(url, retries=3, subfolder=None, save_description=False):
                 ),
                 "outtmpl": os.path.join(download_path, "%(title)s.%(ext)s"),
                 "progress_hooks": [progress_hook_factory("MAIN")],
-                "merge_output_format": "mp4",  # Ensure merged file format
-                "ignoreerrors": True,  # Skip bad videos
+                "merge_output_format": "mp4",
+                "keepvideo": False,
+                "postprocessors": [
+                    {
+                        "key": "FFmpegVideoRemuxer",
+                        "preferedformat": "mp4",
+                    }
+                ],
+                "ignoreerrors": True,
             }
 
             # Download the video with the selected format
