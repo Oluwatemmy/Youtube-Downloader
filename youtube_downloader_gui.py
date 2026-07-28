@@ -1979,25 +1979,184 @@ def _find_ffmpeg() -> Optional[str]:
     return None
 
 
-def _warn_if_ffmpeg_missing(root: tk.Tk) -> None:
-    """Show a one-shot warning if ffmpeg isn't available.
+# Static Windows build maintained by BtbN; the "-latest-" URL always points
+# at the newest release, so we don't have to chase version numbers.
+_FFMPEG_WIN64_URL = (
+    "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/"
+    "ffmpeg-master-latest-win64-gpl.zip"
+)
 
-    Downloads above 720p often need ffmpeg to merge separate video+audio
-    streams. Without it, yt-dlp silently falls back to lower-quality
-    single-file formats — a confusing failure mode for users.
+
+def _ffmpeg_install_dir() -> Path:
+    """Where downloaded ffmpeg gets installed. Sits next to the app files."""
+    return Path(__file__).parent / "ffmpeg"
+
+
+def _download_ffmpeg(root: tk.Tk) -> bool:
+    """Download and extract ffmpeg into the app folder.
+
+    Returns True on success. Shows a modal progress dialog on `root` and
+    runs the download on a worker thread so the UI stays responsive.
+    """
+    import io
+    import threading
+    import urllib.request
+    import zipfile
+
+    install_dir = _ffmpeg_install_dir()
+    install_dir.mkdir(parents=True, exist_ok=True)
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Installing FFmpeg")
+    dialog.transient(root)
+    dialog.grab_set()
+    dialog.resizable(False, False)
+    dialog.geometry("420x140")
+
+    ttk.Label(
+        dialog,
+        text="Downloading FFmpeg (~100 MB)…\nThis only happens once.",
+        justify="left",
+        padding=(16, 12),
+    ).pack(anchor="w")
+
+    progress = ttk.Progressbar(dialog, mode="determinate", length=380)
+    progress.pack(padx=16, pady=(0, 6))
+
+    status_var = tk.StringVar(value="Starting…")
+    ttk.Label(dialog, textvariable=status_var, padding=(16, 0)).pack(anchor="w")
+
+    # Cross-thread signalling: worker writes into `result`, UI polls it.
+    result: Dict[str, object] = {"done": False, "ok": False, "error": None}
+
+    def worker() -> None:
+        try:
+            req = urllib.request.Request(
+                _FFMPEG_WIN64_URL,
+                headers={"User-Agent": "YouTubeDownloaderPro/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                total = int(resp.headers.get("Content-Length", 0)) or None
+                buf = io.BytesIO()
+                downloaded = 0
+                while True:
+                    chunk = resp.read(64 * 1024)
+                    if not chunk:
+                        break
+                    buf.write(chunk)
+                    downloaded += len(chunk)
+                    result["downloaded"] = downloaded
+                    result["total"] = total
+
+            result["status"] = "Extracting…"
+            with zipfile.ZipFile(buf) as zf:
+                # BtbN's zip nests everything under a single top-level dir
+                # like `ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe`. We
+                # only need ffmpeg.exe and ffprobe.exe from the bin folder.
+                bin_dst = install_dir / "bin"
+                bin_dst.mkdir(exist_ok=True)
+                for name in zf.namelist():
+                    lower = name.lower()
+                    if lower.endswith("/bin/ffmpeg.exe") or lower.endswith("/bin/ffprobe.exe"):
+                        target = bin_dst / Path(name).name
+                        with zf.open(name) as src, open(target, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+
+            if not (install_dir / "bin" / "ffmpeg.exe").exists():
+                raise RuntimeError("ffmpeg.exe not found in downloaded archive")
+
+            result["ok"] = True
+        except Exception as exc:
+            result["error"] = exc
+        finally:
+            result["done"] = True
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    def poll() -> None:
+        if result.get("done"):
+            dialog.destroy()
+            return
+        downloaded = result.get("downloaded")
+        total = result.get("total")
+        status_override = result.get("status")
+        if status_override:
+            progress.configure(mode="indeterminate")
+            progress.start(20)
+            status_var.set(str(status_override))
+        elif downloaded is not None:
+            if total:
+                pct = downloaded / total * 100
+                progress.configure(mode="determinate", maximum=100, value=pct)
+                status_var.set(f"{downloaded/1_048_576:.1f} / {total/1_048_576:.1f} MB")
+            else:
+                progress.configure(mode="indeterminate")
+                progress.start(20)
+                status_var.set(f"{downloaded/1_048_576:.1f} MB")
+        root.after(200, poll)
+
+    root.after(200, poll)
+    root.wait_window(dialog)
+
+    if not result.get("ok"):
+        err = result.get("error")
+        messagebox.showerror(
+            "FFmpeg install failed",
+            f"Could not install FFmpeg automatically:\n\n{err}\n\n"
+            "You can install it manually from https://ffmpeg.org/download.html "
+            "and add it to PATH, then restart the app.",
+            parent=root,
+        )
+        return False
+
+    # Prepend to PATH so the current session picks it up without a restart.
+    bin_dir = install_dir / "bin"
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+    return True
+
+
+def _ensure_ffmpeg(root: tk.Tk) -> None:
+    """Ensure ffmpeg is available. Offers to auto-install if it's missing.
+
+    Downloads above 720p need ffmpeg to merge separate video+audio streams.
+    Without it, yt-dlp silently drops to lower-quality single-file formats.
     """
     if _find_ffmpeg():
         return
-    messagebox.showwarning(
-        "FFmpeg not found",
-        "FFmpeg was not detected on your system.\n\n"
-        "High-quality downloads (1080p and above) require FFmpeg to merge "
-        "separate video and audio streams. Without it, downloads will be "
-        "limited to lower-quality single-file formats.\n\n"
-        "Install FFmpeg from https://ffmpeg.org/download.html "
-        "and add it to PATH, then restart the app.",
+
+    if sys.platform != "win32":
+        messagebox.showwarning(
+            "FFmpeg not found",
+            "FFmpeg is required for high-quality downloads.\n\n"
+            "Install it via your package manager (e.g. `brew install ffmpeg` "
+            "on macOS, `apt install ffmpeg` on Debian/Ubuntu) and restart.",
+            parent=root,
+        )
+        return
+
+    want_install = messagebox.askyesno(
+        "Install FFmpeg?",
+        "FFmpeg is required for high-quality downloads (1080p and up) and "
+        "for merging separate video and audio streams.\n\n"
+        "Would you like to download and install it now?\n"
+        "(About 100 MB, installed alongside the app — no admin rights needed.)",
         parent=root,
     )
+    if not want_install:
+        messagebox.showinfo(
+            "Limited quality",
+            "Downloads will be limited to lower-quality single-file formats.\n"
+            "You can install FFmpeg later by restarting the app.",
+            parent=root,
+        )
+        return
+
+    if _download_ffmpeg(root):
+        messagebox.showinfo(
+            "FFmpeg installed",
+            "FFmpeg was installed successfully. You're ready to download.",
+            parent=root,
+        )
 
 
 def main():
@@ -2059,7 +2218,7 @@ def main():
 
     root.protocol("WM_DELETE_WINDOW", on_closing)
 
-    _warn_if_ffmpeg_missing(root)
+    _ensure_ffmpeg(root)
 
     # Start the application
     root.mainloop()
