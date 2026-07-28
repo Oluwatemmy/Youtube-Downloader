@@ -6,11 +6,32 @@ This script checks dependencies and launches the main application.
 It also handles the pkg_resources deprecation warning.
 """
 
+import os
 import sys
 import subprocess
 import importlib.util
 import warnings
 from pathlib import Path
+
+# Windows console defaults to cp1252, which can't encode the emoji banners
+# below and crashes with UnicodeEncodeError. Force UTF-8 on both streams
+# before any print() runs. Ignored on platforms where reconfigure is a no-op.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+# Make Python's ssl module use the operating system's trust store instead of
+# the bundled Mozilla store. This is required on machines where an antivirus
+# (Avast, Kaspersky, corporate MITM proxy, etc.) intercepts HTTPS and installs
+# its own root CA into the OS trust store — the Mozilla store won't have that
+# root, so every yt-dlp request fails with CERTIFICATE_VERIFY_FAILED.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
 
 # Suppress warnings early
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources.*")
@@ -56,7 +77,8 @@ def check_and_install_dependencies():
         ("yt-dlp", "yt_dlp"),
         ("aiohttp", "aiohttp"),
         ("aiofiles", "aiofiles"),
-        ("tqdm", "tqdm")
+        ("tqdm", "tqdm"),
+        ("truststore", "truststore"),
     ]
 
     missing_deps = []

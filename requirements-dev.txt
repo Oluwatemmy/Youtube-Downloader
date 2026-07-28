@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Packaging
+pyinstaller>=6.0.0
+
+# Icon generation (create_icon.py)
+pillow>=9.0.0

@@ -3,6 +3,7 @@ from tkinter import ttk, scrolledtext, messagebox, filedialog
 import threading
 import queue
 import asyncio
+import shutil
 import sys
 import os
 import warnings
@@ -16,6 +17,16 @@ from urllib.parse import urlparse, parse_qs
 
 # Suppress the pkg_resources deprecation warning
 warnings.filterwarnings("ignore", category=UserWarning, module="pkg_resources")
+
+# Make Python's ssl module use the operating system's trust store instead of
+# the bundled Mozilla store. Antivirus HTTPS-scanning (Avast, Kaspersky) and
+# corporate MITM proxies install their root CA in the OS store only, so
+# without this every request fails with CERTIFICATE_VERIFY_FAILED.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
 
 # Import our enhanced downloader
 sys.path.insert(0, str(Path(__file__).parent))
@@ -1945,6 +1956,50 @@ class YouTubeDownloaderGUI:
             print(f"Error updating tree item: {e}")
 
 
+def _find_ffmpeg() -> Optional[str]:
+    """Return the path to ffmpeg if available, otherwise None.
+
+    Checks PATH first, then a `ffmpeg/bin/` folder next to the executable —
+    this second location is where the Windows installer bundles ffmpeg.
+    """
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+
+    bundled = Path(sys.executable).parent / "ffmpeg" / "bin" / "ffmpeg.exe"
+    if bundled.exists():
+        os.environ["PATH"] = f"{bundled.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+        return str(bundled)
+
+    app_bundled = Path(__file__).parent / "ffmpeg" / "bin" / "ffmpeg.exe"
+    if app_bundled.exists():
+        os.environ["PATH"] = f"{app_bundled.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+        return str(app_bundled)
+
+    return None
+
+
+def _warn_if_ffmpeg_missing(root: tk.Tk) -> None:
+    """Show a one-shot warning if ffmpeg isn't available.
+
+    Downloads above 720p often need ffmpeg to merge separate video+audio
+    streams. Without it, yt-dlp silently falls back to lower-quality
+    single-file formats — a confusing failure mode for users.
+    """
+    if _find_ffmpeg():
+        return
+    messagebox.showwarning(
+        "FFmpeg not found",
+        "FFmpeg was not detected on your system.\n\n"
+        "High-quality downloads (1080p and above) require FFmpeg to merge "
+        "separate video and audio streams. Without it, downloads will be "
+        "limited to lower-quality single-file formats.\n\n"
+        "Install FFmpeg from https://ffmpeg.org/download.html "
+        "and add it to PATH, then restart the app.",
+        parent=root,
+    )
+
+
 def main():
     """Enhanced main application entry point"""
     root = tk.Tk()
@@ -2003,6 +2058,8 @@ def main():
             root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    _warn_if_ffmpeg_missing(root)
 
     # Start the application
     root.mainloop()
