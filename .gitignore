@@ -1,3 +1,6 @@
+# App-managed bundled binaries (downloaded on first launch)
+ffmpeg/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
