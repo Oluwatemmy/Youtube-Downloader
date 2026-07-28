@@ -155,12 +155,17 @@ class ChunkedDownloader:
 class OptimizedYoutubeDownloader:
     """Main downloader with all performance optimizations"""
     
-    def __init__(self, download_dir: str = "downloads", max_concurrent: int = 20):
+    def __init__(
+        self,
+        download_dir: str = "downloads",
+        max_concurrent: int = 20,
+        cookies_from_browser: Optional[str] = None,
+    ):
         self.download_dir = Path(download_dir)
         self.download_dir.mkdir(exist_ok=True)
         self.max_concurrent = max_concurrent
         self.semaphore = asyncio.Semaphore(max_concurrent)
-        
+
         # Optimized yt-dlp options
         self.ydl_opts = {
             'quiet': True,
@@ -176,7 +181,18 @@ class OptimizedYoutubeDownloader:
             'noresizebuffer': True,
             'continuedl': True,
             'noprogress': True,
+            # YouTube's `web` player client is aggressively bot-blocked in
+            # 2026 -- it returns "Sign in to confirm you're not a bot" even
+            # for public videos. The `android` client uses a mobile API
+            # surface that isn't gated the same way. We keep `web` as a
+            # fallback for extractors where android is missing formats.
+            'extractor_args': {
+                'youtube': {'player_client': ['android', 'web']},
+            },
         }
+
+        if cookies_from_browser:
+            self.ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
         
         # Process pool for CPU-intensive operations
         self.process_pool = ProcessPoolExecutor(max_workers=mp.cpu_count())
