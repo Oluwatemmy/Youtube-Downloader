@@ -1,0 +1,335 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YouT Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ============ title bar ============ -->
+  <div class="titlebar">
+    <div class="title-logo">
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round">
+        <path d="M12 4v11"/><path d="M6 12l6 6 6-6"/>
+      </svg>
+    </div>
+    <span class="title-name">YouT Manager</span>
+    <span class="title-crumb">— <span id="crumb">Downloads · All downloads</span></span>
+    <div class="title-spacer"></div>
+    <button class="theme-btn" id="theme-btn"><span id="theme-label">Light</span> theme</button>
+    <div class="win-controls">
+      <button id="win-min" title="Minimize"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1"><path d="M0 5h10"/></svg></button>
+      <button id="win-max" title="Maximize"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"/></svg></button>
+      <button class="close-btn" id="win-close" title="Close"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0L0 10"/></svg></button>
+    </div>
+  </div>
+
+  <!-- ============ toolbar ============ -->
+  <div class="toolbar" id="toolbar">
+    <button class="btn-primary" id="add-url-btn">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Add URL <span class="kbd">Ctrl N</span>
+    </button>
+    <div class="tool-divider"></div>
+    <div id="tool-buttons"><!-- populated by app.js --></div>
+    <div class="title-spacer"></div>
+    <div class="search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
+      <input id="search" placeholder="Search downloads" autocomplete="off"/>
+    </div>
+  </div>
+
+  <!-- ============ main ============ -->
+  <div class="main">
+
+    <!-- --- sidebar --- -->
+    <div class="sidebar">
+      <div class="side-header">Queue</div>
+      <div id="cat-list"><!-- populated --></div>
+      <div class="side-fill"></div>
+      <div class="side-nav">
+        <button class="nav-btn active" data-view="downloads">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4 20h16"/></svg>
+          Downloads
+        </button>
+        <button class="nav-btn" data-view="settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.6v3M12 18.4v3M2.6 12h3M18.4 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+          Settings
+        </button>
+        <button class="nav-btn" data-view="analytics">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 20V11"/><path d="M10.5 20V4.5"/><path d="M16.5 20v-6.5"/><path d="M21 20H3"/></svg>
+          Analytics
+        </button>
+        <div class="side-version">v2.4.1 · yt-dlp <span id="ytdlp-version">—</span></div>
+      </div>
+    </div>
+
+    <!-- --- content --- -->
+    <div class="content" id="content">
+
+      <!-- downloads view -->
+      <div id="view-downloads" class="view-downloads">
+        <div class="tbl-header">
+          <button class="chk" id="chk-all"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></button>
+          <button class="sort name" data-sort="file">Name <span class="arrow">▲</span></button>
+          <button class="sort right" data-sort="size">Size <span class="arrow">▲</span></button>
+          <button class="sort name" data-sort="pct">Progress <span class="arrow">▲</span></button>
+          <button class="sort right" data-sort="speed">Speed <span class="arrow">▲</span></button>
+          <button class="sort right" data-sort="eta">Time left <span class="arrow">▲</span></button>
+          <button class="sort right" data-sort="status">Status <span class="arrow">▲</span></button>
+        </div>
+        <div class="tbl-body" id="tbl-body"><!-- rows --></div>
+
+        <!-- detail panel -->
+        <div class="detail">
+          <div class="detail-tabs" id="detail-tabs">
+            <button class="active" data-detail="Info">Info</button>
+            <button data-detail="Log">Log</button>
+            <button data-detail="Speed">Speed</button>
+            <div class="detail-title"></div>
+            <span class="detail-file" id="detail-file">—</span>
+            <button class="detail-toggle" id="detail-toggle" title="Show / hide details">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 15l6-6 6 6"/></svg>
+            </button>
+          </div>
+          <div class="detail-body" id="detail-body"><!-- pane -->
+            <div class="info-pane" id="pane-info">
+              <div class="info-thumb"><div class="ph">thumbnail 1280×720</div></div>
+              <div class="info-grid" id="info-grid"></div>
+            </div>
+            <div class="log-pane" id="pane-log" hidden></div>
+            <div class="speed-pane" id="pane-speed" hidden>
+              <div class="speed-head">
+                <span class="speed-num" id="speed-num">0 MB/s</span>
+                <span class="speed-note">aggregate · peak <span id="speed-peak">0 MB/s</span> · last 60 s</span>
+              </div>
+              <svg viewBox="0 0 600 92">
+                <g stroke="var(--stroke)" stroke-width="1">
+                  <line x1="0" y1="88" x2="600" y2="88"/>
+                  <line x1="0" y1="59" x2="600" y2="59"/>
+                  <line x1="0" y1="30" x2="600" y2="30"/>
+                  <line x1="0" y1="2" x2="600" y2="2"/>
+                </g>
+                <polyline id="speed-line" fill="none" stroke="var(--acc)" stroke-width="1.8" points=""/>
+                <g fill="var(--tx3)" font-size="9" font-family="var(--mono)">
+                  <text x="4" y="12">60 MB/s</text><text x="4" y="86">0</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- status footer -->
+        <div class="footer">
+          <span class="status"><span class="dot"></span><span id="status-line">Ready</span></span>
+          <div class="mini"><div class="done" id="mini-done" style="width:0%"></div><div class="active" id="mini-active" style="width:0%"></div></div>
+          <span class="disk" id="disk-line">—</span>
+        </div>
+      </div>
+
+      <!-- settings view -->
+      <div id="view-settings" class="settings-view" hidden>
+        <div class="settings-inner">
+          <div>
+            <div class="view-title">Settings</div>
+            <div class="view-subtitle">Applies to new downloads · queued items keep the settings they were added with</div>
+          </div>
+          <div id="settings-groups"><!-- populated --></div>
+          <div class="settings-actions">
+            <button class="btn-accent" id="save-settings">Save changes</button>
+            <button class="btn-plain" id="reset-settings">Reset to defaults</button>
+            <span class="settings-config-path" id="config-path">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- analytics view -->
+      <div id="view-analytics" class="analytics-view" hidden>
+        <div class="analytics-inner">
+          <div class="analytics-head">
+            <div class="title-block">
+              <div class="view-title">Analytics</div>
+              <div class="view-subtitle">Local history · nothing leaves this machine</div>
+            </div>
+            <button class="btn-hollow" id="export-csv">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 16V4"/><path d="M7.5 11.5L12 16l4.5-4.5"/><path d="M4 20h16"/></svg>
+              Export CSV
+            </button>
+            <button class="btn-danger-hollow" id="clear-history">Clear history</button>
+          </div>
+          <div class="stats-grid" id="stats-grid"></div>
+          <div class="chart-card">
+            <div class="chart-head">
+              <span class="t">Downloads per day</span>
+              <span class="s"><span id="chart-total">0 total</span></span>
+              <div class="title-spacer"></div>
+              <span class="l"><span class="sw" style="background:var(--acc)"></span>successful<span class="sw" style="background:var(--stroke2); margin-left:8px"></span>failed</span>
+            </div>
+            <svg viewBox="0 0 620 176">
+              <g stroke="var(--stroke)" stroke-width="1">
+                <line x1="26" y1="146" x2="620" y2="146"/>
+                <line x1="26" y1="113.5" x2="620" y2="113.5"/>
+                <line x1="26" y1="81" x2="620" y2="81"/>
+                <line x1="26" y1="48.5" x2="620" y2="48.5"/>
+                <line x1="26" y1="16" x2="620" y2="16"/>
+              </g>
+              <g fill="var(--tx3)" font-size="9.5" font-family="var(--mono)">
+                <text x="0" y="149">0</text><text x="0" y="117">8</text><text x="0" y="84">16</text><text x="0" y="52">24</text><text x="0" y="19">32</text>
+              </g>
+              <g id="chart-bars"></g>
+              <g id="chart-labels" fill="var(--tx3)" font-size="9.5" font-family="var(--mono)"></g>
+            </svg>
+          </div>
+          <div class="hist-card">
+            <div class="hist-head">Recent activity</div>
+            <div class="hist-cols"><span>Timestamp</span><span>Title</span><span>Status</span><span>Size</span></div>
+            <div id="hist-rows"></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- ============ Add URL modal ============ -->
+<div class="modal-backdrop hidden" id="modal">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <span class="t">Add download</span>
+      <div class="title-spacer"></div>
+      <button class="modal-close" id="modal-close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-tabs" id="modal-tabs">
+      <button class="active" data-mtab="single">Single URL</button>
+      <button data-mtab="batch">Multiple URLs</button>
+    </div>
+    <div class="modal-body">
+      <!-- Stage 1: URL entry -->
+      <div id="modal-single" class="field">
+        <span class="field-label">Video or playlist URL</span>
+        <div class="url-input" id="url-input">
+          <input id="url-field" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off"/>
+          <svg class="icon-valid" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" hidden><path d="M20 6L9 17l-5-5"/></svg>
+          <svg class="icon-invalid" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" hidden><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </div>
+        <span class="field-err" id="url-err" hidden>Only youtube.com and youtu.be links are supported.</span>
+        <span id="fetch-status" class="field-hint" hidden></span>
+      </div>
+      <div id="modal-batch" class="field" hidden>
+        <div class="field-row">
+          <span class="field-label">One URL per line</span>
+          <div class="title-spacer"></div>
+          <span class="mono"><span id="batch-count">0</span> detected · duplicates skipped</span>
+        </div>
+        <textarea class="batch-area" id="batch-area" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…&#10;https://youtu.be/…"></textarea>
+      </div>
+
+      <!-- Stage 2: revealed once formats are known / URLs are entered -->
+      <div id="stage2" hidden>
+        <div class="field">
+          <span class="field-label">Quality</span>
+          <select class="set-select" id="dlg-quality" style="width:100%"></select>
+        </div>
+        <div class="field" style="margin-top: 12px">
+          <span class="field-label">Save to</span>
+          <div class="field-row" style="gap:7px">
+            <input class="set-input mono flex1" id="dlg-folder" style="height:32px"/>
+            <button class="set-btn" id="dlg-browse" style="height:32px">Browse…</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint" id="dlg-hint">Paste a URL to get started</span>
+      <button class="btn-quiet" id="dlg-cancel">Cancel</button>
+      <button class="btn-accent" id="dlg-download" disabled>Download</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ context menu ============ -->
+<div class="ctx-menu hidden" id="ctx-menu"></div>
+
+<!-- ============ first-run cookies wizard ============ -->
+<div class="modal-backdrop hidden" id="wizard">
+  <div class="modal" style="width:520px" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <span class="t">Get higher qualities</span>
+      <div class="title-spacer"></div>
+      <button class="modal-close" id="wiz-close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <!-- step 1: intro -->
+      <div id="wiz-step-1">
+        <p style="font-size: 13px; line-height: 1.55; color: var(--tx2)">
+          By default this app can only download videos up to <b style="color:var(--tx)">360p</b>.
+          For <b style="color:var(--tx)">720p, 1080p, 4K and age-restricted videos</b>, YouTube
+          needs to see you're signed in. The one-time fix is a small
+          <b style="color:var(--tx)">cookies.txt</b> file exported from your browser — takes about
+          a minute.
+        </p>
+        <p style="font-size: 12px; line-height: 1.5; color: var(--tx3); margin-top: 10px">
+          Nothing gets uploaded anywhere. The file lives only on your machine.
+        </p>
+      </div>
+      <!-- step 2: extension -->
+      <div id="wiz-step-2" hidden>
+        <p style="font-size: 13px; line-height: 1.55; color: var(--tx2)">
+          <b style="color:var(--tx)">1.</b> Install the free extension
+          <b style="color:var(--tx)">"Get cookies.txt LOCALLY"</b> for your browser:
+        </p>
+        <div style="margin: 12px 0; display: flex; flex-direction: column; gap: 6px">
+          <a id="wiz-ext-link" href="#" target="_blank"
+             style="display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:7px;background:var(--layer2);border:1px solid var(--stroke2);color:var(--tx);text-decoration:none;font-size:12.5px"
+             onclick="event.stopPropagation()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            <span id="wiz-ext-label">Open the extension in your browser</span>
+          </a>
+        </div>
+        <p style="font-size: 13px; line-height: 1.55; color: var(--tx2)">
+          <b style="color:var(--tx)">2.</b> Open
+          <a href="https://www.youtube.com" target="_blank" style="color:var(--acc);text-decoration:none">youtube.com</a>
+          and make sure you're signed in.
+        </p>
+        <p style="font-size: 13px; line-height: 1.55; color: var(--tx2); margin-top: 8px">
+          <b style="color:var(--tx)">3.</b> Click the extension icon → <b style="color:var(--tx)">Export</b> →
+          save the file (default name <code style="font-family: var(--mono); font-size: 11.5px">cookies.txt</code>).
+        </p>
+      </div>
+      <!-- step 3: import -->
+      <div id="wiz-step-3" hidden>
+        <p style="font-size: 13px; line-height: 1.55; color: var(--tx2)">
+          Almost done. Point the app at your <code style="font-family: var(--mono); font-size: 12px">cookies.txt</code>:
+        </p>
+        <div id="wiz-detected" hidden style="margin-top: 12px">
+          <div style="font-size: 11.5px; color: var(--tx3); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px">Detected in Downloads</div>
+          <div id="wiz-detected-list"></div>
+        </div>
+        <div style="margin-top: 14px; display: flex; gap: 8px; align-items: center">
+          <input class="set-input mono flex1" id="wiz-cookies-path" placeholder="…or paste a path" style="height:34px"/>
+          <button class="set-btn" id="wiz-browse" style="height:34px">Browse…</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-quiet" id="wiz-skip">Skip — 360p only</button>
+      <div class="title-spacer"></div>
+      <button class="btn-plain" id="wiz-back" hidden>Back</button>
+      <button class="btn-accent" id="wiz-next">Continue</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
