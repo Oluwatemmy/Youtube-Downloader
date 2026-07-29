@@ -79,6 +79,7 @@ def check_and_install_dependencies():
         ("aiofiles", "aiofiles"),
         ("tqdm", "tqdm"),
         ("truststore", "truststore"),
+        ("pywebview", "webview"),
     ]
 
     missing_deps = []
@@ -135,18 +136,26 @@ def check_required_files():
 
 
 def launch_application():
-    """Launch the main application"""
+    """Launch the main application.
+
+    Prefers the new pywebview UI. If pywebview isn't importable (missing
+    dep, WebView2 runtime unavailable), falls back to the Tkinter GUI so
+    the app still starts.
+    """
     try:
         print("\n🚀 Launching YouTube Downloader Pro...")
 
-        # Import and run the main application
         current_dir = Path(__file__).parent
         sys.path.insert(0, str(current_dir))
 
-        # Import the enhanced GUI
-        from youtube_downloader_gui import main
+        try:
+            import webview  # noqa: F401 — probe the pywebview install
+            from youtube_downloader_pywebview import main
+            print("[info] using pywebview UI")
+        except ImportError as exc:
+            print(f"[warn] pywebview unavailable ({exc}); falling back to Tkinter UI")
+            from youtube_downloader_gui import main
 
-        # Run the application
         main()
 
     except ImportError as e:

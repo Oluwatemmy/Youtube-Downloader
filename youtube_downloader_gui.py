@@ -93,6 +93,10 @@ class YouTubeDownloaderGUI:
         self.video_quality = tk.StringVar(value="best")
         self.save_descriptions = tk.BooleanVar(value=False)
         self.auto_load_info = tk.BooleanVar(value=True)
+        # Cookies-from-browser: "none" or a browser name yt-dlp supports
+        # (chrome / edge / firefox / brave / opera / vivaldi / safari).
+        # Needed when YouTube's anti-bot check fires on a request.
+        self.cookies_browser = tk.StringVar(value="none")
 
         # Data
         self.download_queue = []
@@ -594,6 +598,28 @@ class YouTubeDownloaderGUI:
         timeout_spin = ttk.Spinbox(advanced_frame, from_=10, to=120,
                                    textvariable=self.timeout_seconds, width=15)
         timeout_spin.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=(10, 0))
+
+        ttk.Label(advanced_frame, text="🍪 Cookies from browser:",
+                  font=('Segoe UI', 10, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(10, 0))
+
+        cookies_combo = ttk.Combobox(
+            advanced_frame,
+            textvariable=self.cookies_browser,
+            values=['none', 'chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'safari'],
+            state='readonly',
+            width=13,
+        )
+        cookies_combo.grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=(10, 0))
+
+        ttk.Label(
+            advanced_frame,
+            text="Use when YouTube shows \"Sign in to confirm you're not a bot\". "
+                 "Close the chosen browser first — its cookie DB is locked while it's open.",
+            font=('Segoe UI', 9),
+            foreground='#666666',
+            wraplength=520,
+            justify=tk.LEFT,
+        ).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(4, 0))
 
         # Action buttons
         action_frame = ttk.Frame(settings_container)
@@ -1107,6 +1133,7 @@ class YouTubeDownloaderGUI:
                             'socket_timeout': 30,
                             'no_check_certificate': True,
                             'ignore_errors': False,
+                            **self._yt_dlp_shared_opts(),
                         }
 
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1531,9 +1558,8 @@ class YouTubeDownloaderGUI:
                             'fragment_retries': 2,
                             'socket_timeout': 30,
                             'progress_hooks': [progress_hook] if progress_callback else [],
-                            # Additional options for better compatibility
-                            'cookiefile': None,
                             'no_check_certificate': True,
+                            **self._yt_dlp_shared_opts(),
                         }
 
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1798,6 +1824,25 @@ class YouTubeDownloaderGUI:
         # Schedule next check - more frequent for better responsiveness
         self.root.after(50, self.process_progress)
 
+    def _yt_dlp_shared_opts(self) -> Dict:
+        """Options that every yt-dlp call in the GUI must include.
+
+        - `extractor_args`: YouTube's `web` player client is aggressively
+          bot-blocked in 2026. `android` uses a different API surface and
+          slips past the check for most videos.
+        - `cookiesfrombrowser`: when the user has picked a browser, pull
+          its cookies so age-gated / bot-flagged videos work.
+        """
+        opts: Dict = {
+            'extractor_args': {
+                'youtube': {'player_client': ['android', 'web']},
+            },
+        }
+        browser = self.cookies_browser.get()
+        if browser and browser != 'none':
+            opts['cookiesfrombrowser'] = (browser,)
+        return opts
+
     def save_settings(self):
         """Enhanced settings saving with user feedback"""
         settings = {
@@ -1806,6 +1851,7 @@ class YouTubeDownloaderGUI:
             'video_quality': self.video_quality.get(),
             'save_descriptions': self.save_descriptions.get(),
             'auto_load_info': self.auto_load_info.get(),
+            'cookies_browser': self.cookies_browser.get(),
             'retry_attempts': getattr(self, 'retry_attempts', tk.IntVar(value=3)).get(),
             'timeout_seconds': getattr(self, 'timeout_seconds', tk.IntVar(value=30)).get()
         }
@@ -1835,6 +1881,7 @@ class YouTubeDownloaderGUI:
                 self.video_quality.set(settings.get('video_quality', 'best'))
                 self.save_descriptions.set(settings.get('save_descriptions', False))
                 self.auto_load_info.set(settings.get('auto_load_info', True))
+                self.cookies_browser.set(settings.get('cookies_browser', 'none'))
 
                 # Initialize new settings with defaults if they don't exist
                 if not hasattr(self, 'retry_attempts'):
