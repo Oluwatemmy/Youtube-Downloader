@@ -124,6 +124,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "cookies_browser": "none",
     "cookies_file": "",           # path to a cookies.txt exported from a browser
     "wizard_seen": False,         # first-run cookies wizard has been shown
+    "mp3_bitrate": "192",         # default kbps for MP3 extraction (320/256/192/128/96)
 }
 
 DEFAULT_ANALYTICS: Dict[str, Any] = {
@@ -195,7 +196,8 @@ class DownloadManager:
         with self._lock:
             return [dict(i) for i in self._items]
 
-    def add(self, url: str, format_id: Optional[str] = None) -> int:
+    def add(self, url: str, format_id: Optional[str] = None,
+            audio: bool = False, bitrate: str = "192") -> int:
         url = url.strip()
         if not url:
             raise ValueError("empty url")
@@ -203,7 +205,11 @@ class DownloadManager:
             if self._settings.get("dupes") and any(i["url"] == url for i in self._items):
                 return -1
             item = self._new_item(url)
-            item["format_id"] = format_id  # explicit format override, or None to use settings
+            # Audio mode overrides any video format_id — we always want
+            # bestaudio and let FFmpegExtractAudio postprocess to MP3.
+            item["format_id"] = None if audio else format_id
+            item["audio_only"] = bool(audio)
+            item["audio_bitrate"] = str(bitrate or "192")
             self._items.append(item)
         self._emit_queue()
         self._persist()
@@ -211,8 +217,10 @@ class DownloadManager:
         self._futures[item["id"]] = self._pool.submit(self._run, item["id"])
         return item["id"]
 
-    def add_batch(self, urls: List[str], format_id: Optional[str] = None) -> List[int]:
-        return [self.add(u, format_id=format_id) for u in urls if u.strip()]
+    def add_batch(self, urls: List[str], format_id: Optional[str] = None,
+                  audio: bool = False, bitrate: str = "192") -> List[int]:
+        return [self.add(u, format_id=format_id, audio=audio, bitrate=bitrate)
+                for u in urls if u.strip()]
 
     def remove(self, id_: int) -> None:
         """Delete an item from the queue AND its file(s) from disk.
@@ -393,6 +401,7 @@ class DownloadManager:
             "added": datetime.now().strftime("%H:%M:%S"),
             "got": "0 B", "error": None, "output_path": None,
             "thumbnail": "",
+            "audio_only": False, "audio_bitrate": "192",
         }
 
     def _update(self, id_: int, **fields) -> None:
@@ -593,13 +602,23 @@ class DownloadManager:
                 self._update(id_, error=str(last_meta_exc)[:400])
 
             if info:
+                # Audio-only items get an MP3-flavored label so users can
+                # tell at a glance which rows will be muxed to .mp3 vs
+                # kept as video.
+                with self._lock:
+                    it_snap = self._find(id_) or {}
+                is_audio = bool(it_snap.get("audio_only"))
+                bitrate = str(it_snap.get("audio_bitrate") or "192")
+                quality_label = (f"MP3 {bitrate} kbps"
+                                 if is_audio else self._quality_label(info))
+                file_ext = "mp3" if is_audio else (info.get("ext") or "mp4")
                 self._update(
                     id_,
                     title=info.get("title") or url,
-                    file=(info.get("title") or url) + "." + (info.get("ext") or "mp4"),
+                    file=(info.get("title") or url) + "." + file_ext,
                     uploader=info.get("uploader") or "—",
                     dur=_fmt_duration(info.get("duration")),
-                    quality=self._quality_label(info),
+                    quality=quality_label,
                     size=_fmt_bytes(info.get("filesize") or info.get("filesize_approx")),
                     mb=int((info.get("filesize") or info.get("filesize_approx") or 0) / 1_048_576),
                     thumbnail=self._pick_thumbnail(info),
@@ -649,11 +668,31 @@ class DownloadManager:
                     self._update(id_, pct=100, speed="—", eta="—",
                                  output_path=d.get("filename"))
 
-            # Prefer the specific format_id chosen in the Add URL dialog;
-            # fall back to the Settings quality preference otherwise.
+            # Per-item mode: audio-only rips bestaudio and postprocesses
+            # to MP3 with the user's chosen bitrate; video mode uses the
+            # dialog-picked format_id (or the Settings quality default).
             with self._lock:
-                item_format = (self._find(id_) or {}).get("format_id")
-            format_selector = item_format if item_format else self._format_selector()
+                cur = self._find(id_) or {}
+                item_format = cur.get("format_id")
+                is_audio = bool(cur.get("audio_only"))
+                bitrate = str(cur.get("audio_bitrate") or "192")
+
+            extra_opts: Dict[str, Any] = {
+                "outtmpl": outtmpl,
+                "progress_hooks": [hook],
+                "writesubtitles": bool(self._settings.get("desc")),
+                "continuedl": not fresh,
+                "overwrites": fresh,
+            }
+            if is_audio:
+                extra_opts["format"] = "bestaudio/best"
+                extra_opts["postprocessors"] = [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": bitrate,
+                }]
+            else:
+                extra_opts["format"] = item_format if item_format else self._format_selector()
 
             # Reuse the same (player_client, use_cookies) combo that
             # succeeded during metadata extraction — otherwise the download
@@ -661,14 +700,8 @@ class DownloadManager:
             # Per-run overrides: `fresh` runs disable resume so a stale
             # .part can't cause HTTP 416; pause→resume runs enable it so
             # the download picks up where it stopped.
-            opts = self._ydl_opts({
-                "outtmpl": outtmpl,
-                "format": format_selector,
-                "progress_hooks": [hook],
-                "writesubtitles": bool(self._settings.get("desc")),
-                "continuedl": not fresh,
-                "overwrites": fresh,
-            }, player_client=chosen_client, use_cookies=chosen_use_cookies)
+            opts = self._ydl_opts(extra_opts, player_client=chosen_client,
+                                  use_cookies=chosen_use_cookies)
 
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
@@ -798,12 +831,24 @@ class PyBridge:
     def get_queue(self) -> List[Dict[str, Any]]:
         return self._mgr.all()
 
-    def add_url(self, url: str, format_id: Optional[str] = None) -> Dict[str, Any]:
-        id_ = self._mgr.add(url, format_id=format_id)
+    def add_url(self, url: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        options = options or {}
+        id_ = self._mgr.add(
+            url,
+            format_id=options.get("format_id"),
+            audio=bool(options.get("audio")),
+            bitrate=options.get("bitrate") or self._settings.get("mp3_bitrate", "192"),
+        )
         return {"id": id_}
 
-    def add_batch(self, urls: List[str], format_id: Optional[str] = None) -> Dict[str, Any]:
-        return {"ids": self._mgr.add_batch(urls, format_id=format_id)}
+    def add_batch(self, urls: List[str], options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        options = options or {}
+        return {"ids": self._mgr.add_batch(
+            urls,
+            format_id=options.get("format_id"),
+            audio=bool(options.get("audio")),
+            bitrate=options.get("bitrate") or self._settings.get("mp3_bitrate", "192"),
+        )}
 
     def get_formats(self, url: str) -> Dict[str, Any]:
         """Return the list of formats yt-dlp actually finds for `url`, with

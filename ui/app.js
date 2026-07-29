@@ -49,8 +49,8 @@ const FakeApi = {
   get_settings: async () => FAKE_SETTINGS,
   save_settings:async (v) => { Object.assign(FAKE_SETTINGS, v); return true; },
   get_analytics:async () => FAKE_ANALYTICS,
-  add_url:      async (url, fmt) => { console.log("add_url", url, fmt); return true; },
-  add_batch:    async (urls, fmt) => { console.log("add_batch", urls, fmt); return true; },
+  add_url:      async (url, opts) => { console.log("add_url", url, opts); return true; },
+  add_batch:    async (urls, opts) => { console.log("add_batch", urls, opts); return true; },
   get_formats:  async (url) => ({
     title: "Sample video", duration: "5:42",
     formats: [
@@ -108,6 +108,8 @@ const state = {
   formatsError: null,
   formatsUrl: null,            // URL the current formats belong to (avoid stale results)
   formatsNote: null,           // e.g. "only low-res — try cookies"
+  dlgMode: "video",            // "video" | "audio" — Add URL dialog format mode
+  audioBitrate: "192",         // kbps when dlgMode === "audio"
   speedHistory: [],            // aggregate bytes/sec, one sample per second, last 60
   speedPeak: 0,                // peak bytes/sec seen this session
   theme: "dark",               // dark | light
@@ -728,6 +730,9 @@ function openDialog() {
   state.dialog = true; state.urlValue = ""; state.batchValue = "";
   state.formats = null; state.formatId = "best"; state.formatsLoading = false;
   state.formatsError = null; state.formatsUrl = null; state.formatsNote = null;
+  // Reset to Video mode each open. Bitrate keeps the last saved default.
+  state.dlgMode = "video";
+  state.audioBitrate = state.settings?.mp3_bitrate || "192";
   // Also clear the DOM inputs — resetting state alone doesn't do it,
   // and the previous URL was persisting into the next open.
   $("url-field").value = "";
@@ -742,22 +747,28 @@ function renderDialog() {
   document.querySelectorAll("#modal-tabs button").forEach(b => b.classList.toggle("active", b.dataset.mtab === state.dlgTab));
   $("modal-single").hidden = state.dlgTab !== "single";
   $("modal-batch").hidden  = state.dlgTab !== "batch";
+  document.querySelectorAll(".mode-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === state.dlgMode));
   validateUrl();
   updateStage2Visibility();
   updateFetchStatus();
   updateDialogHint();
   updateSubmitButtons();
+  updateDownloadLabel();
   $("dlg-folder").value = state.settings?.folder || "";
 }
 
-// Stage 2 (Quality + Format + Save-to) is revealed only once we have
-// something useful to show — real formats for a single URL, or ≥1 URL
-// in the batch textarea.
+// Stage 2 (Quality + Save-to) is revealed once we have something useful
+// to show. In video single-URL mode that means real formats fetched.
+// In audio mode the bitrate ladder is a fixed list, so as soon as the
+// URL looks valid we can show it. Batch mode: ≥1 URL in the textarea.
 function stage2Ready() {
-  if (state.dlgTab === "single") {
-    return !!(state.formats && state.formats.length > 0);
+  if (state.dlgTab === "batch") {
+    return state.batchValue.split("\n").filter(l => l.trim()).length > 0;
   }
-  return state.batchValue.split("\n").filter(l => l.trim()).length > 0;
+  if (state.dlgMode === "audio") {
+    return /youtu\.?be/i.test(state.urlValue);
+  }
+  return !!(state.formats && state.formats.length > 0);
 }
 function updateStage2Visibility() {
   const show = stage2Ready();
@@ -765,8 +776,11 @@ function updateStage2Visibility() {
   if (show) renderFormatOptions();
 }
 function updateSubmitButtons() {
-  const canGo = stage2Ready() && !state.formatsLoading;
+  const canGo = stage2Ready() && (state.dlgMode === "audio" || !state.formatsLoading);
   $("dlg-download").disabled = !canGo;
+}
+function updateDownloadLabel() {
+  $("dlg-download").textContent = state.dlgMode === "audio" ? "Download MP3" : "Download";
 }
 function updateFetchStatus() {
   const el = $("fetch-status");
@@ -809,8 +823,26 @@ function renderFormatOptions() {
   const sel = $("dlg-quality");
   sel.innerHTML = "";
 
-  // In batch mode we can't fetch per-video formats, so show a generic
-  // ladder that maps to yt-dlp's format selectors.
+  // Audio mode: swap the quality ladder for an MP3 bitrate dropdown.
+  // The label changes too so the user knows they're picking kbps, not resolution.
+  if (state.dlgMode === "audio") {
+    $("quality-label").textContent = "MP3 bitrate";
+    [
+      ["320", "320 kbps — max quality"],
+      ["256", "256 kbps"],
+      ["192", "192 kbps — recommended"],
+      ["128", "128 kbps"],
+      ["96",  "96 kbps — smallest"],
+    ].forEach(([v, label]) => sel.appendChild(el("option", { text: label, attrs: { value: v } })));
+    sel.value = state.audioBitrate;
+    sel.disabled = false;
+    const n = $("dlg-note"); if (n) { n.hidden = true; n.textContent = ""; }
+    return;
+  }
+
+  $("quality-label").textContent = "Quality";
+
+  // Video-mode batch: can't fetch per-video formats, generic ladder.
   if (state.dlgTab === "batch") {
     const generic = [
       ["best",  "Best available"],
@@ -820,12 +852,10 @@ function renderFormatOptions() {
       ["720p",  "Up to 720p"],
       ["480p",  "Up to 480p"],
       ["360p",  "Up to 360p"],
-      ["audio", "Audio only"],
     ];
     generic.forEach(([v, label]) => sel.appendChild(el("option", { text: label, attrs: { value: v } })));
     sel.value = state.formatId && generic.some(g => g[0] === state.formatId) ? state.formatId : "best";
     sel.disabled = false;
-    // No per-URL note in batch mode.
     const n = $("dlg-note"); if (n) { n.hidden = true; n.textContent = ""; }
     return;
   }
@@ -904,14 +934,17 @@ function validateUrl() {
   $("url-err").hidden = !showInvalid;
 }
 async function submitDialog() {
-  const fmt = state.formatId && state.formatId !== "best" ? state.formatId : null;
+  const isAudio = state.dlgMode === "audio";
+  const options = isAudio
+    ? { audio: true, bitrate: state.audioBitrate }
+    : { format_id: state.formatId && state.formatId !== "best" ? state.formatId : null };
   if (state.dlgTab === "single") {
     if (!state.urlValue) return;
-    await api().add_url(state.urlValue, fmt);
+    await api().add_url(state.urlValue, options);
   } else {
     const urls = state.batchValue.split("\n").map(l => l.trim()).filter(Boolean);
     if (!urls.length) return;
-    await api().add_batch(urls, fmt);
+    await api().add_batch(urls, options);
   }
   closeDialog();
   await refreshQueue();
@@ -1099,8 +1132,23 @@ function wire() {
     updateSubmitButtons();
   });
   $("dlg-quality").addEventListener("change", (e) => {
-    state.formatId = e.target.value;
-    renderFormatOptions();  // may hide the Format dropdown
+    if (state.dlgMode === "audio") {
+      state.audioBitrate = e.target.value;
+    } else {
+      state.formatId = e.target.value;
+    }
+  });
+
+  // Video / Audio mode toggle inside stage 2
+  document.querySelectorAll(".mode-btn").forEach(b => {
+    b.addEventListener("click", () => {
+      state.dlgMode = b.dataset.mode;
+      document.querySelectorAll(".mode-btn").forEach(x => x.classList.toggle("active", x === b));
+      // Audio mode is instant-ready; video mode needs formats to be back.
+      updateStage2Visibility();
+      updateSubmitButtons();
+      updateDownloadLabel();
+    });
   });
   $("dlg-browse").addEventListener("click", async () => {
     const p = await api().browse_folder();
