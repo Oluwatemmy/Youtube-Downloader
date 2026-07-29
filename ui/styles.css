@@ -82,9 +82,7 @@ body {
   padding-left: 12px;
   border-bottom: 1px solid var(--stroke);
   user-select: none;
-  -webkit-app-region: drag;
 }
-.titlebar > *, .titlebar button { -webkit-app-region: no-drag; }
 .title-logo {
   width: 16px; height: 16px; border-radius: 4px; background: var(--acc);
   display: flex; align-items: center; justify-content: center;
@@ -98,15 +96,7 @@ body {
   transition: background 120ms ease-out, color 120ms ease-out;
 }
 .theme-btn:hover { background: var(--layer2); color: var(--tx); }
-
-.win-controls { display: flex; }
-.win-controls button {
-  width: 44px; height: 36px;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--tx2);
-}
-.win-controls button:hover { background: var(--layer2); }
-.win-controls .close-btn:hover { background: #C42B1C; color: #fff; }
+.theme-btn { margin-right: 12px; }
 
 /* ----- toolbar ------------------------------------------------------ */
 
@@ -911,3 +901,4 @@ body.density-compact .tbl-row { height: 38px; }
 .ctx-menu .g { width: 13px; flex: none; text-align: center; font-size: 11px; }
 .ctx-menu .label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .ctx-menu .k { margin-left: auto; font: 400 10.5px/1 var(--mono); opacity: .6; flex: none; }
+

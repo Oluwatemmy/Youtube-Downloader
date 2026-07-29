@@ -159,13 +159,13 @@ def main() -> None:
         width=1280, height=820,
         min_size=(900, 600),
         background_color="#1B1B1B",
-        # The design ships its own title bar / min-max-close controls, so
-        # we drop the OS chrome. `easy_drag=False` lets the CSS
-        # `-webkit-app-region: drag` rule on our titlebar handle dragging
-        # instead of pywebview's built-in whole-window drag (which would
-        # trigger on rows, buttons, etc.).
-        frameless=True,
-        easy_drag=False,
+        resizable=True,
+        # Use the native OS window chrome for the title bar / min-max-close
+        # controls. Frameless mode on WebView2 doesn't reliably support
+        # CSS-based dragging or resize handles, and users lose the ability
+        # to move / resize / snap the window — which is worse than losing
+        # a bespoke title bar.
+        frameless=False,
     )
     api.attach(window)
 

@@ -10,7 +10,7 @@
 
 <div class="app">
 
-  <!-- ============ title bar ============ -->
+  <!-- ============ brand / breadcrumb bar (native OS chrome handles min/max/close/drag) ============ -->
   <div class="titlebar">
     <div class="title-logo">
       <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round">
@@ -21,11 +21,6 @@
     <span class="title-crumb">— <span id="crumb">Downloads · All downloads</span></span>
     <div class="title-spacer"></div>
     <button class="theme-btn" id="theme-btn"><span id="theme-label">Light</span> theme</button>
-    <div class="win-controls">
-      <button id="win-min" title="Minimize"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1"><path d="M0 5h10"/></svg></button>
-      <button id="win-max" title="Maximize"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"/></svg></button>
-      <button class="close-btn" id="win-close" title="Close"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0L0 10"/></svg></button>
-    </div>
   </div>
 
   <!-- ============ toolbar ============ -->
@@ -270,6 +265,39 @@
 
 <!-- ============ context menu ============ -->
 <div class="ctx-menu hidden" id="ctx-menu"></div>
+
+<!-- ============ clipboard-url prompt (centered modal) ============ -->
+<div class="modal-backdrop hidden" id="clip-modal">
+  <div class="modal" style="width:440px" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:26px;height:26px;border-radius:6px;background:var(--accS);display:flex;align-items:center;justify-content:center">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--acc)">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>
+          </svg>
+        </div>
+        <span class="t">YouTube link on your clipboard</span>
+      </div>
+      <div class="title-spacer"></div>
+      <button class="modal-close" id="clip-modal-close" title="Dismiss">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;line-height:1.5;color:var(--tx2);margin-bottom:8px">
+        Want to add this to your downloads?
+      </p>
+      <div style="padding:10px 12px;border-radius:7px;background:var(--layer2);border:1px solid var(--stroke);
+                  font:400 12px/1.4 var(--mono);color:var(--tx);word-break:break-all"
+           id="clip-modal-url"></div>
+    </div>
+    <div class="modal-foot">
+      <div class="title-spacer"></div>
+      <button class="btn-quiet" id="clip-modal-skip">Not now</button>
+      <button class="btn-accent" id="clip-modal-add">Add to queue</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============ first-run cookies wizard ============ -->
 <div class="modal-backdrop hidden" id="wizard">

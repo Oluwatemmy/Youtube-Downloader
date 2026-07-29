@@ -68,10 +68,12 @@ const FakeApi = {
   stop:         async (id) => { console.log("stop", id); return true; },
   retry:        async (id) => { console.log("retry", id); return true; },
   open_folder:  async (id) => { console.log("open_folder", id); return true; },
+  open_file:    async (id) => { console.log("open_file", id); return true; },
   browse_folder:async () => "C:\\Users\\alex\\Videos\\YouT",
   browse_cookies_file: async () => "",
   default_browser: async () => "chrome",
   find_cookies_txt: async () => [],
+  check_clipboard_url: async () => ({}),
   ytdlp_version:async () => "2026.07.14",
   quit_app:     async () => { window.close(); },
   minimize:     async () => {},
@@ -383,6 +385,9 @@ function renderRows() {
     row.appendChild(statusCell);
 
     row.addEventListener("click",       () => { state.sel = i.id; renderRows(); renderDetail(); renderToolButtons(); });
+    // Double-clicking a completed row launches the file in the OS default
+    // player. No-op for rows that haven't finished yet.
+    row.addEventListener("dblclick",    () => { if (i.status === "Done") api().open_file(i.id); });
     row.addEventListener("mouseenter",  () => { state.hover = i.id; if (i.status === "Failed") renderRows(); });
     row.addEventListener("mouseleave",  () => { state.hover = null; if (i.status === "Failed") renderRows(); });
     row.addEventListener("contextmenu", (e) => { e.preventDefault(); state.sel = i.id; openMenu(e.clientX, e.clientY, i); });
@@ -693,6 +698,11 @@ function menuFor(item) {
   } else if (status === "Failed") {
     items.push({ name: "Retry download", key: "Ctrl R", glyph: "↻", act: () => api().retry(item.id) });
   }
+  // Done rows: launching the file in the default player is the most
+  // common action, so it goes right at the top.
+  if (status === "Done") {
+    items.push({ name: "Open file", key: "Enter", glyph: "▶", act: () => api().open_file(item.id) });
+  }
   // Actions that always make sense.
   const opensGroup = items.length > 0;
   items.push({ name: "Open containing folder", key: "Ctrl O", glyph: "▤",
@@ -966,6 +976,11 @@ function renderAll() {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
 }
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = (el.tagName || "").toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+}
 
 // ---------------------------------------------------------------
 // speed sampling — the Speed detail-pane needs a live line chart of
@@ -1058,10 +1073,7 @@ function wire() {
     $("theme-label").textContent = state.theme === "dark" ? "Light" : "Dark";
   });
 
-  // window controls
-  $("win-min").addEventListener("click",   () => api().minimize?.());
-  $("win-max").addEventListener("click",   () => api().maximize?.());
-  $("win-close").addEventListener("click", () => api().quit_app?.());
+  // Window minimize/maximize/close are handled by the native OS chrome now.
 
   // toolbar
   $("add-url-btn").addEventListener("click", (e) => { e.stopPropagation(); openDialog(); });
@@ -1165,6 +1177,12 @@ function wire() {
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.key.toLowerCase() === "n") { e.preventDefault(); openDialog(); }
     if (e.key === "Escape" && state.dialog) closeDialog();
+    // Enter on the selected Done row opens the file in the default player,
+    // matching file-manager convention. Ignored while typing in inputs.
+    if (e.key === "Enter" && !isTypingTarget(e.target)) {
+      const it = state.queue.find(i => i.id === state.sel);
+      if (it && it.status === "Done") { e.preventDefault(); api().open_file(it.id); }
+    }
   });
 
   // First-run cookies wizard
@@ -1215,6 +1233,62 @@ async function boot() {
   // First-run cookies wizard: only if the user hasn't seen it yet and
   // hasn't already set up a cookies file / browser cookies elsewhere.
   await maybeShowWizard();
+  // Clipboard-URL toast: check on focus and once at startup.
+  wireClipboardToast();
+  checkClipboardForUrl();
+}
+
+// ---------------------------------------------------------------
+// Clipboard-URL prompt — when the user has copied a YouTube link
+// into their browser and then comes back to the app, show a centered
+// modal offering to add it. One click instead of paste → dialog → go.
+// ---------------------------------------------------------------
+const clipSeen = new Set();       // URLs we've already offered this session
+
+function wireClipboardToast() {
+  window.addEventListener("focus", () => { checkClipboardForUrl(); });
+  $("clip-modal").addEventListener("click", hideClipModal);   // backdrop close
+  $("clip-modal-close").addEventListener("click", hideClipModal);
+  $("clip-modal-skip").addEventListener("click", hideClipModal);
+  $("clip-modal-add").addEventListener("click", async () => {
+    const url = $("clip-modal").dataset.url;
+    hideClipModal();
+    if (!url) return;
+    openDialog();
+    // Give the Add URL modal a beat to render before we fill it in.
+    setTimeout(() => {
+      $("url-field").value = url;
+      state.urlValue = url;
+      validateUrl();
+      scheduleFormatFetch(url);
+    }, 40);
+  });
+}
+
+async function checkClipboardForUrl() {
+  try {
+    const res = await api().check_clipboard_url();
+    const url = res && res.url;
+    if (!url) return;
+    if (clipSeen.has(url)) return;
+    // Skip if this URL is already in the queue.
+    if (state.queue.some(i => i.url === url)) { clipSeen.add(url); return; }
+    // Don't stack modals — bail if any other dialog is open.
+    if (state.dialog) return;
+    if (!$("clip-modal").classList.contains("hidden")) return;
+    clipSeen.add(url);
+    showClipModal(url);
+  } catch { /* clipboard unreadable, nothing to do */ }
+}
+
+function showClipModal(url) {
+  const m = $("clip-modal");
+  m.dataset.url = url;
+  $("clip-modal-url").textContent = url;
+  m.classList.remove("hidden");
+}
+function hideClipModal() {
+  $("clip-modal").classList.add("hidden");
 }
 
 // ---------------------------------------------------------------
