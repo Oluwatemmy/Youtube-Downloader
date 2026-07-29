@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -272,13 +273,22 @@ class DownloadManager:
         self._update(id_, status="Paused", speed="paused", eta="—")
 
     def resume(self, id_: int) -> None:
-        """Continue a paused download from the existing .part file."""
+        """Continue a paused download from the existing .part file.
+        No-op if a future for this item is already in flight (Queued
+        items already have one waiting in the pool)."""
         with self._lock:
             it = self._find(id_)
             if not it:
                 return
             it["status"] = "Queued"
         self._cancelled.discard(id_)
+        existing = self._futures.get(id_)
+        if existing and not existing.done():
+            # Already queued or running — just clear the cancel flag and
+            # let the existing future do its job. Emitting keeps the UI
+            # in sync (status back to Queued/Downloading).
+            self._emit_queue()
+            return
         self._futures[id_] = self._pool.submit(self._run, id_, fresh=False)
         self._emit_queue()
 
@@ -343,6 +353,70 @@ class DownloadManager:
             subprocess.Popen(["open", str(target)])
         else:
             subprocess.Popen(["xdg-open", str(target)])
+
+    def open_file(self, id_: int) -> bool:
+        """Launch the downloaded file in the OS default player.
+
+        Tries `output_path` first; if that's stale (the item was
+        downloaded before the postprocessor-hook fix, so the path
+        points at an intermediate that no longer exists), falls back
+        to scanning the download folder for a file whose stem matches
+        the video title.
+        """
+        with self._lock:
+            it = self._find(id_)
+        if not it:
+            return False
+
+        candidate = it.get("output_path")
+        if not candidate or not Path(candidate).exists():
+            candidate = self._locate_finished_file(it)
+        if not candidate:
+            return False
+
+        try:
+            if sys.platform == "win32":
+                os.startfile(candidate)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", candidate])
+            else:
+                subprocess.Popen(["xdg-open", candidate])
+        except OSError:
+            return False
+
+        # Cache the resolved path so subsequent opens skip the scan and
+        # a future Delete knows exactly which file to remove.
+        with self._lock:
+            live = self._find(id_)
+            if live:
+                live["output_path"] = candidate
+        self._persist()
+        return True
+
+    def _locate_finished_file(self, item: Dict[str, Any]) -> Optional[str]:
+        """Best-effort scan of the download folder for the file matching
+        this item's title. Used when output_path is stale/missing."""
+        title = (item.get("title") or "").strip()
+        if not title:
+            return None
+        download_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+        if not download_dir.exists():
+            return None
+        # yt-dlp sanitizes some chars in the output template; mirror that.
+        stem = title.replace(":", "-").replace("/", "-").replace("?", "").replace("|", "-")[:120]
+        exts = (".mp3", ".m4a", ".mp4", ".mkv", ".webm") if item.get("audio_only") \
+            else (".mp4", ".mkv", ".webm", ".m4a", ".mp3")
+        # Prefer exact stem match, then fall back to prefix match.
+        for ext in exts:
+            p = download_dir / f"{stem}{ext}"
+            if p.exists():
+                return str(p)
+        for ext in exts:
+            for p in download_dir.glob(f"{stem}*{ext}"):
+                # Skip .part / .ytdl artifacts.
+                if p.suffix.lower() in exts:
+                    return str(p)
+        return None
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -649,8 +723,12 @@ class DownloadManager:
 
             def hook(d: Dict[str, Any]) -> None:
                 # Called on the download thread; must be quick.
+                # KeyboardInterrupt (rather than DownloadError) so yt-dlp
+                # treats it as terminal and doesn't retry the fragment —
+                # otherwise the worker slot stays busy after a pause and
+                # queued items never get a chance to run.
                 if id_ in self._cancelled:
-                    raise yt_dlp.DownloadError("cancelled")
+                    raise KeyboardInterrupt("cancelled by user")
                 status = d.get("status")
                 if status == "downloading":
                     downloaded = d.get("downloaded_bytes") or 0
@@ -665,8 +743,26 @@ class DownloadManager:
                         size=_fmt_bytes(total),
                     )
                 elif status == "finished":
+                    # Provisional path — for simple single-file downloads
+                    # this is the final file. For anything that needs
+                    # merging (video+audio) or postprocessing (MP3
+                    # extraction), pp_hook below will overwrite it with
+                    # the real output.
                     self._update(id_, pct=100, speed="—", eta="—",
                                  output_path=d.get("filename"))
+
+            def pp_hook(d: Dict[str, Any]) -> None:
+                """Fires after each postprocessor step. The last one that
+                fires is the true final file (mp3 after FFmpegExtractAudio,
+                mp4 after FFmpegMerger, etc.)."""
+                if d.get("status") != "finished":
+                    return
+                info = d.get("info_dict") or {}
+                final = (info.get("filepath")
+                         or info.get("_filename")
+                         or info.get("filename"))
+                if final:
+                    self._update(id_, output_path=final)
 
             # Per-item mode: audio-only rips bestaudio and postprocesses
             # to MP3 with the user's chosen bitrate; video mode uses the
@@ -680,6 +776,7 @@ class DownloadManager:
             extra_opts: Dict[str, Any] = {
                 "outtmpl": outtmpl,
                 "progress_hooks": [hook],
+                "postprocessor_hooks": [pp_hook],
                 "writesubtitles": bool(self._settings.get("desc")),
                 "continuedl": not fresh,
                 "overwrites": fresh,
@@ -708,6 +805,9 @@ class DownloadManager:
 
             self._update(id_, status="Done", pct=100, speed="—", eta="—", error=None)
 
+        except KeyboardInterrupt:
+            # User-initiated pause / stop — clean exit, free the worker.
+            self._update(id_, status="Paused", speed="—", eta="—")
         except yt_dlp.DownloadError as exc:
             if id_ in self._cancelled:
                 self._update(id_, status="Paused", speed="—", eta="—")
@@ -982,6 +1082,9 @@ class PyBridge:
     def open_folder(self, id_: Optional[int] = None) -> bool:
         self._mgr.open_folder(int(id_) if id_ else 0); return True
 
+    def open_file(self, id_: int) -> bool:
+        return self._mgr.open_file(int(id_))
+
     # --- settings ---
 
     def get_settings(self) -> Dict[str, Any]:
@@ -1146,6 +1249,37 @@ class PyBridge:
             return yt_dlp.version.__version__
         except Exception:
             return "?"
+
+    _YT_URL_RE = re.compile(
+        r"https?://(?:www\.|m\.|music\.)?(?:youtube\.com/(?:watch\?[^\s]*v=|playlist\?[^\s]*list=|shorts/|live/)|youtu\.be/)[\w\-?=&/]+",
+        re.IGNORECASE,
+    )
+
+    def check_clipboard_url(self) -> Dict[str, str]:
+        """If the OS clipboard contains a YouTube URL, return it. Empty
+        dict otherwise. Used by the UI to offer one-click add when the
+        user pastes a link into their browser and then focuses the app.
+
+        Uses PowerShell's Get-Clipboard so we don't need a third-party
+        package. Only reads text; safely ignores binary clipboard content.
+        """
+        if sys.platform != "win32":
+            return {}
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+                capture_output=True, text=True, timeout=2,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return {}
+        text = (result.stdout or "").strip()
+        if not text or len(text) > 2000:
+            return {}
+        match = self._YT_URL_RE.search(text)
+        if not match:
+            return {}
+        return {"url": match.group(0)}
 
     def minimize(self) -> bool:
         if self._window:
