@@ -91,6 +91,7 @@ class YouTubeDownloaderGUI:
         self.download_dir = tk.StringVar(value=str(Path.home() / "Downloads" / "YouTube"))
         self.max_concurrent = tk.IntVar(value=3)
         self.video_quality = tk.StringVar(value="best")
+        self.output_format = tk.StringVar(value="video")  # "video" or "mp3"
         self.save_descriptions = tk.BooleanVar(value=False)
         self.auto_load_info = tk.BooleanVar(value=True)
 
@@ -458,6 +459,28 @@ class YouTubeDownloaderGUI:
         primary_buttons = ttk.Frame(control_panel)
         primary_buttons.grid(row=0, column=0, sticky=tk.W)
 
+        # Output format selector (Video MP4 / Audio MP3)
+        format_selector_frame = ttk.Frame(primary_buttons)
+        format_selector_frame.pack(side=tk.LEFT, padx=(0, 12))
+
+        ttk.Label(format_selector_frame, text="📤 Formato:",
+                  font=('Segoe UI', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.format_video_rb = ttk.Radiobutton(
+            format_selector_frame, text="🎬 Vídeo (MP4)",
+            variable=self.output_format, value="video",
+            command=self.on_format_change)
+        self.format_video_rb.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.format_mp3_rb = ttk.Radiobutton(
+            format_selector_frame, text="🎵 Áudio (MP3)",
+            variable=self.output_format, value="mp3",
+            command=self.on_format_change)
+        self.format_mp3_rb.pack(side=tk.LEFT, padx=4)
+
+        # Separator
+        ttk.Separator(primary_buttons, orient='vertical').pack(side=tk.LEFT, fill=tk.Y, padx=8)
+
         self.download_button = ttk.Button(primary_buttons, text="▶️ Start Download",
                                           command=self.start_download)
         self.download_button.pack(side=tk.LEFT, padx=(0, 8))
@@ -540,21 +563,45 @@ class YouTubeDownloaderGUI:
         quality_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
         quality_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(quality_frame, text="🎬 Video Quality:",
+        ttk.Label(quality_frame, text="📤 Formato de Saída:",
                   font=('Segoe UI', 10, 'bold')).grid(row=0, column=0, sticky=tk.W)
 
-        quality_combo = ttk.Combobox(quality_frame, textvariable=self.video_quality,
+        format_settings_frame = ttk.Frame(quality_frame)
+        format_settings_frame.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+
+        ttk.Radiobutton(format_settings_frame, text="🎬 Vídeo (MP4)",
+                        variable=self.output_format, value="video",
+                        command=self.on_format_change).pack(side=tk.LEFT, padx=(0, 15))
+        ttk.Radiobutton(format_settings_frame, text="🎵 Áudio (MP3)",
+                        variable=self.output_format, value="mp3",
+                        command=self.on_format_change).pack(side=tk.LEFT)
+
+        ttk.Label(quality_frame, text="🎬 Video Quality:",
+                  font=('Segoe UI', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
+
+        self.quality_combo = ttk.Combobox(quality_frame, textvariable=self.video_quality,
                                      values=["best", "best[height<=1080p]", "best[height<=720p]",
                                              "best[height<=480p]", "best[height<=360p]", "worst"],
                                      state="readonly", width=20)
-        quality_combo.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
+        self.quality_combo.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=(10, 0))
+
+        ttk.Label(quality_frame, text="🎵 MP3 Quality:",
+                  font=('Segoe UI', 10, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(10, 0))
+
+        self.mp3_quality = tk.StringVar(value="192")
+        self.mp3_quality_combo = ttk.Combobox(quality_frame, textvariable=self.mp3_quality,
+                                              values=["320", "256", "192", "128", "96"],
+                                              state="readonly", width=20)
+        self.mp3_quality_combo.grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=(10, 0))
+        ttk.Label(quality_frame, text="kbps",
+                  font=('Segoe UI', 9)).grid(row=2, column=2, sticky=tk.W, padx=(5, 0), pady=(10, 0))
 
         ttk.Label(quality_frame, text="⚡ Concurrent Downloads:",
-                  font=('Segoe UI', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=(10, 0))
+                  font=('Segoe UI', 10, 'bold')).grid(row=3, column=0, sticky=tk.W, pady=(10, 0))
 
         concurrent_spin = ttk.Spinbox(quality_frame, from_=1, to=10,
                                       textvariable=self.max_concurrent, width=15)
-        concurrent_spin.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=(10, 0))
+        concurrent_spin.grid(row=3, column=1, sticky=tk.W, padx=(10, 0), pady=(10, 0))
 
         # Behavior Settings Card
         behavior_card = ttk.LabelFrame(settings_container, text="🎯 Behavior Settings", padding="20")
@@ -1459,9 +1506,11 @@ class YouTubeDownloaderGUI:
             self.message_queue.put(("error", f"Download setup error: {str(e)}"))
 
     async def simple_download_fallback(self, url, download_path, progress_callback=None):
-        """Enhanced download with multiple format fallbacks"""
+        """Enhanced download with multiple format fallbacks and MP3 support"""
         try:
             import concurrent.futures
+
+            output_fmt = self.output_format.get()  # "video" or "mp3"
 
             def download_sync():
                 # Progress hook that calls our callback
@@ -1469,7 +1518,38 @@ class YouTubeDownloaderGUI:
                     if progress_callback:
                         progress_callback(d)
 
-                # Try multiple format selectors in order of preference
+                # ── MP3 / audio-only mode ───────────────────────────────────
+                if output_fmt == "mp3":
+                    mp3_bitrate = self.mp3_quality.get() if hasattr(self, 'mp3_quality') else "192"
+                    ydl_opts = {
+                        'outtmpl': str(download_path / '%(title)s.%(ext)s'),
+                        'format': 'bestaudio/best',
+                        'quiet': True,
+                        'no_warnings': True,
+                        'ignoreerrors': False,
+                        'retries': 2,
+                        'fragment_retries': 2,
+                        'socket_timeout': 30,
+                        'no_check_certificate': True,
+                        'progress_hooks': [progress_hook] if progress_callback else [],
+                        'postprocessors': [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': mp3_bitrate,
+                        }],
+                    }
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            result = ydl.download([url])
+                            if result == 0:
+                                return True, f"Downloaded MP3 ({mp3_bitrate} kbps) successfully"
+                        return False, "MP3 download failed"
+                    except yt_dlp.DownloadError as e:
+                        return False, f"yt-dlp MP3 error: {str(e)}"
+                    except Exception as e:
+                        return False, f"MP3 download error: {str(e)}"
+
+                # ── Video mode (MP4) ────────────────────────────────────────
                 quality_setting = self.video_quality.get()
 
                 # Define format fallback chain
@@ -1567,6 +1647,25 @@ class YouTubeDownloaderGUI:
 
         except Exception as e:
             return False, f"Fallback error: {str(e)}"
+
+    def on_format_change(self):
+        """Handle output format change between video and MP3"""
+        is_video = self.output_format.get() == "video"
+        # Enable/disable video quality selector based on format
+        try:
+            self.quality_combo.config(state="readonly" if is_video else "disabled")
+        except AttributeError:
+            pass
+        # Update download button label
+        try:
+            if is_video:
+                self.download_button.config(text="▶️ Start Download")
+                self.status_var.set("Formato: Vídeo (MP4)")
+            else:
+                self.download_button.config(text="▶️ Extrair MP3")
+                self.status_var.set("Formato: Áudio (MP3) — requer FFmpeg")
+        except AttributeError:
+            pass
 
     def pause_download(self):
         """Pause current downloads"""
@@ -1804,6 +1903,8 @@ class YouTubeDownloaderGUI:
             'download_dir': self.download_dir.get(),
             'max_concurrent': self.max_concurrent.get(),
             'video_quality': self.video_quality.get(),
+            'output_format': self.output_format.get(),
+            'mp3_quality': getattr(self, 'mp3_quality', tk.StringVar(value='192')).get(),
             'save_descriptions': self.save_descriptions.get(),
             'auto_load_info': self.auto_load_info.get(),
             'retry_attempts': getattr(self, 'retry_attempts', tk.IntVar(value=3)).get(),
@@ -1833,8 +1934,13 @@ class YouTubeDownloaderGUI:
                 self.download_dir.set(settings.get('download_dir', self.download_dir.get()))
                 self.max_concurrent.set(settings.get('max_concurrent', 3))
                 self.video_quality.set(settings.get('video_quality', 'best'))
+                self.output_format.set(settings.get('output_format', 'video'))
                 self.save_descriptions.set(settings.get('save_descriptions', False))
                 self.auto_load_info.set(settings.get('auto_load_info', True))
+
+                # Load MP3 quality setting
+                if hasattr(self, 'mp3_quality'):
+                    self.mp3_quality.set(settings.get('mp3_quality', '192'))
 
                 # Initialize new settings with defaults if they don't exist
                 if not hasattr(self, 'retry_attempts'):
@@ -1846,6 +1952,9 @@ class YouTubeDownloaderGUI:
                     self.timeout_seconds = tk.IntVar(value=settings.get('timeout_seconds', 30))
                 else:
                     self.timeout_seconds.set(settings.get('timeout_seconds', 30))
+
+                # Apply format-dependent UI state
+                self.on_format_change()
 
             except Exception as e:
                 print(f"Error loading settings: {e}")
