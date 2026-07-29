@@ -234,8 +234,21 @@
 
       <!-- Stage 2: revealed once formats are known / URLs are entered -->
       <div id="stage2" hidden>
-        <div class="field">
-          <span class="field-label">Quality</span>
+        <div class="field" style="margin-bottom: 12px">
+          <span class="field-label">Download as</span>
+          <div class="mode-toggle" role="tablist">
+            <button class="mode-btn active" data-mode="video" role="tab">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="16" height="12" rx="2"/><path d="M18 10l4-2v8l-4-2z"/></svg>
+              Video
+            </button>
+            <button class="mode-btn" data-mode="audio" role="tab">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              Audio (MP3)
+            </button>
+          </div>
+        </div>
+        <div class="field" id="quality-field">
+          <span class="field-label" id="quality-label">Quality</span>
           <select class="set-select" id="dlg-quality" style="width:100%"></select>
         </div>
         <div class="field" style="margin-top: 12px">
