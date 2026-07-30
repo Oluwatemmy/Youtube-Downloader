@@ -1,317 +1,228 @@
-# YouTube Downloader Pro - Enhanced Edition
+# YouT Manager
 
-**Modern YouTube downloader with enhanced GUI, analytics, and playlist support**
+A Windows desktop YouTube downloader — batch queue, real per-video format
+picker, MP3 extraction, playlists, and a first-run cookies flow so 1080p and
+above actually work in 2026.
 
-## ✨ Features
+<p align="left">
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey" alt="Windows 10+">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
+  <img src="https://img.shields.io/badge/UI-pywebview-red" alt="pywebview UI">
+</p>
 
-### 🚀 **Enhanced Performance**
-- **Async download architecture** for optimal speeds
-- **Smart format fallback chain** for maximum compatibility
-- **Resume capability** for interrupted downloads
-- **Concurrent download support** with configurable limits
-- **Progress tracking** with real-time speed and ETA
+<!-- Drop a screenshot into docs/screenshot.png and it'll show up here -->
+![Screenshot of YouT Manager main view](docs/screenshot.png)
 
-### 🖥️ **Modern GUI Interface**
-- **Streamlined single-tab design** - All features in one place
-- **Integrated playlist support** - Load entire playlists directly to queue
-- **Real-time progress visualization** with progress bars and status updates
-- **Advanced queue management** - Filter, sort, and control downloads
-- **Persistent settings** with user preferences saved automatically
-- **Analytics dashboard** - Track download statistics and history
+## Why this exists
 
-### 🎯 **Smart Features**
-- **Automatic URL validation** with visual feedback
-- **Playlist expansion** - Automatically adds all videos from playlists
-- **Quality selection** (360p to 4K, best, worst)
-- **Description saving** and metadata extraction
-- **Duplicate detection** prevents re-downloading
-- **Context menu** for queue management (remove, retry, open location)
-- **Session tracking** with persistent analytics storage
+I wanted to download a YouTube video to watch on my laptop with a proper
+player — the built-in volume in YouTube's own player was too quiet, and I
+wanted to edit clips out of it. Online "YouTube to MP4" sites were flaky,
+throttled, or capped at 720p. Meanwhile the exact tool that could do it well
+(`yt-dlp`) already existed as a Python library, but opening a terminal every
+time I want to save a video is friction.
 
-## 📦 Installation
+So this is that Python library wearing a proper installable Windows app: copy
+a YouTube link, focus the app, and it already knows the URL from your
+clipboard. Click Download, and the file lands in your downloads folder ready
+to play in VLC / Movies & TV / whatever, or drag into a video editor.
 
-### From Source
-```bash
-# Clone repository
+## What it does
+
+- **Real per-video format list** — after you paste a URL the Quality dropdown
+  fills with the actual streams YouTube has for that video, each with its
+  file size (`1080p MP4 · 138 MB`), not a guess-and-hope generic ladder
+- **MP3 extraction** with a bitrate ladder (320 / 256 / 192 / 128 / 96 kbps)
+  — pulls the audio and produces a real `.mp3` via FFmpeg, not just the
+  source audio stream
+- **Playlist support** — paste a playlist URL, get a checklist of videos;
+  batch or subset, all queued into a subfolder named after the playlist
+- **Cookies-friendly** — a first-run wizard walks you through exporting
+  `cookies.txt` from a browser extension so YouTube's 2026 bot check
+  doesn't gate you to 360p
+- **Auto-installs FFmpeg** on first launch (~100 MB, one-time) so 1080p+
+  merging works without any manual setup
+- **Live per-item speed chart and log** — click a row, watch its throughput
+  in the Speed tab, read yt-dlp's own output in the Log tab
+- **Real Pause vs Stop** — pause keeps the `.part` file so Resume continues;
+  Stop discards it so the next attempt starts fresh
+- **Windows-native window** — proper drag, resize, min/max, snap-to-edges;
+  dark and light themes
+- **Persistent queue and history** — quit mid-download, reopen, everything
+  is there. Analytics tab shows totals + per-day chart
+- **Clipboard detection** — copy a YouTube URL, alt-tab to the app, get a
+  one-click prompt to add it
+- **yt-dlp auto-updater** — Settings has a "Check for updates" button and a
+  quiet weekly check that shows a dot in the sidebar when a new release is
+  out. YouTube changes their site monthly, so this is important.
+- **Crash handler** — uncaught errors surface as a real dialog with the
+  traceback and a Copy button, instead of dying to stderr
+
+## Install (from source)
+
+**Requirements:** Windows 10 or 11, Python 3.10+, ~200 MB free (for the
+bundled FFmpeg download on first run).
+
+```powershell
 git clone https://github.com/Oluwatemmy/Youtube-Downloader.git
 cd Youtube-Downloader
 
-# Install dependencies
-pip install -r requirements.txt
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
 
-# Run the GUI application
-python youtube_downloader_gui.py
+venv\Scripts\python launcher.py
 ```
 
-### Quick Launch
-```bash
-# Use the launcher script (Windows)
-run_youtube_downloader.bat
+Or double-click `run_youtube_downloader.bat` after the venv is set up.
 
-# Or launch directly
-python launcher.py
+On first launch:
+
+1. If FFmpeg isn't on your PATH, the app downloads a static build to
+   `<app>/ffmpeg/bin/` (~100 MB). You'll see a small progress dialog for it.
+2. The **cookies setup wizard** opens. Follow it — takes about a minute and
+   is the difference between getting 360p and getting 4K on any video.
+
+## Using it
+
+- **Add URL** (or Ctrl+N) — paste a single video URL, playlist URL, or use
+  the Multiple URLs tab for a mixed batch
+- Switch **Video ↔ Audio (MP3)** at the top of the dialog
+- Pick a quality from the real per-video list (or a generic ladder for
+  batches / playlists), pick where to save, hit Download
+- **Row hover** shows a primary action button that changes with status:
+  Pause / Resume / Retry / Open folder
+- **Double-click** a completed row to open the file in your default player
+  (also right-click → Open file, or Enter with the row selected)
+- **Right-click** any row for status-aware actions
+- **Analytics tab** — 30-day chart, total downloads, success rate, last 8
+  activity entries. Export to CSV from the top-right
+
+## Cookies (the important part)
+
+As of 2026 YouTube gates most high-quality streams behind a "Sign in to
+confirm you're not a bot" check. Without valid session cookies, you get 360p
+at best and outright rejection on age-restricted / region-locked videos.
+
+**The one-time setup:**
+
+1. Install the browser extension
+   [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+   (Chromium browsers) or
+   [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt-one-click/)
+   (Firefox)
+2. While signed into YouTube, click the extension icon → **Export** →
+   save as `cookies.txt`
+3. In the app: **Settings → Advanced → Cookies file** → **Browse…** → pick
+   the file
+4. That's it. Nothing gets uploaded — the file stays on your machine.
+
+**Alternative:** the "Cookies from browser" dropdown reads directly from
+Chrome / Edge / Firefox / Brave / etc. Only catch: Chromium browsers lock
+their cookie DB while running, so you'd have to close Chrome first. A
+cookies.txt file avoids that.
+
+**Session cookies expire.** If downloads suddenly drop to 360p after
+previously working, re-export cookies.txt and Browse to the new file. YouTube
+also invalidates sessions on password change, new-device sign-in, or
+periodic security refreshes (weeks to months).
+
+## Troubleshooting
+
+**"Only 360p is available."**
+Cookies aren't reaching yt-dlp. Either the cookies file wasn't picked, the
+Chrome cookie DB is locked (close Chrome), or your session expired
+(re-export). Look under the Quality dropdown for the app's own diagnosis.
+
+**"Requested format is not available."**
+Usually means yt-dlp is out of date. Settings → **yt-dlp version** → **Check
+for updates**. Install → restart the app.
+
+**"HTTP Error 403" on a specific video.**
+Either the video is age-restricted (needs signed-in cookies) or your session
+expired. Same fix as above.
+
+**Downloads sit at Queued forever.**
+Increase `Concurrent downloads` in Settings, or make sure the currently
+Downloading item hasn't stalled. Right-click → Stop then Retry as a nuke.
+
+**A row shows the wrong size before completion.**
+For fragmented DASH videos the `Size` column shows an estimate mid-download;
+the real size lands after the file is written. If it's *still* wrong after
+"Done", re-download that item — earlier queue entries were captured before
+the size-from-disk fix.
+
+**Where do the logs live?**
+Per-row: click the row, then the **Log** tab in the detail panel. Session
+crash traces come from the crash modal (Copy details button).
+
+## Config file locations
+
+Everything the app writes lives under `%APPDATA%\YouTubeDownloader\`:
+
+| File | What it holds |
+|---|---|
+| `settings.json` | UI preferences, cookies path, mp3 bitrate, ffmpeg last-check |
+| `queue.json` | Current queue, restored on restart |
+| `history.json` | Completed / failed download log — powers Analytics |
+
+Wipe these to fully reset. Downloads themselves go to your chosen download
+folder (defaults to `%USERPROFILE%\Downloads\YouTube\`); playlists get their
+own subfolder inside it.
+
+FFmpeg (if auto-downloaded) sits in `<app>\ffmpeg\bin\ffmpeg.exe`.
+
+## How it's put together
+
+```
+launcher.py                       Bootstrap: picks the pywebview UI if
+                                  available, otherwise falls back to Tkinter
+youtube_downloader_pywebview.py   Main entry — window + PyBridge
+pywebview_bridge.py               Python side: DownloadManager, PyBridge
+                                  JS API, persistence, ffmpeg auto-install,
+                                  cookies fallback chain
+ui/index.html                     Single-page frontend (the "YouT Manager"
+                                  design)
+ui/styles.css                     Design tokens + component styles
+ui/app.js                         State, rendering, dialogs, playlist
+                                  picker, crash modal
+yt_dlp_enhanced.py                Legacy async backend — only used by the
+                                  Tkinter fallback UI
+youtube_downloader_gui.py         Legacy Tkinter UI — fallback when
+                                  pywebview / WebView2 unavailable
+create_icon.py                    Renders the app icon from the design
+YouTube app design system/        Reference design mockups (gitignored)
 ```
 
-## 🚀 Usage
+Downloads are managed by `DownloadManager` (a thread-pool wrapping yt-dlp
+calls). The frontend talks to `PyBridge` via `window.pywebview.api.<method>`;
+progress and log events push the other way via
+`window.evaluate_js('window.onEvent(...)')`.
 
-### Quick Start
-1. **Launch** the application: `python youtube_downloader_gui.py`
-2. **Enter URLs**:
-   - Single video URL in the Quick Add field
-   - Multiple URLs in the Batch Add section
-   - Playlist URLs automatically expand to include all videos
-3. **Configure settings** in the Settings tab (quality, download location, etc.)
-4. **Start downloading** - Monitor progress in real-time
-5. **View analytics** - Track your download history and statistics
+## Roadmap
 
-### Main Interface Features
+Rough order of what's next:
 
-#### 🔗 **URL Input Section**
-- **Quick Add**: Single URL input with real-time validation
-- **Batch Add**: Multi-line text area for multiple URLs
-- **Playlist Support**: Direct playlist URL input with automatic expansion
-- **Auto-load**: Automatically loads video information when enabled
+- Windows installer (PyInstaller + Start Menu shortcut + uninstaller)
+- Drag-and-drop URLs from the browser
+- Subtitle download option in the Add URL dialog
+- Windows toast notification when a batch completes
+- Speed limit per download
+- Minimize to tray for long-running queues
 
-#### 📋 **Download Queue & Progress**
-- **Integrated queue and progress** - Everything in one view
-- **Real-time progress bars** for overall and current download
-- **Queue filtering** - View all, pending, or completed downloads
-- **Status tracking** - Visual status indicators for each video
-- **Queue management** - Start, pause, stop, clear operations
+## Credits
 
-#### ⚙️ **Settings Tab**
-- **Download folder** selection with browse button
-- **Video quality** options (best to worst, specific resolutions)
-- **Concurrent downloads** configuration (1-10 simultaneous)
-- **Behavior settings** - Auto-load info, save descriptions
-- **Advanced options** - Retry attempts, timeout settings
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — does the actual heavy lifting
+- [pywebview](https://pywebview.flowrl.com/) — Python + native WebView2
+- [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) — static
+  Windows FFmpeg used by the auto-installer
+- [truststore](https://truststore.readthedocs.io/) — makes Python's ssl use
+  the Windows cert store, without which antivirus HTTPS scanning breaks
+  every request
+- [@reissbruno](https://github.com/reissbruno) — proposed MP3 extraction in
+  [PR #5](https://github.com/Oluwatemmy/Youtube-Downloader/pull/5); the
+  current dialog toggle borrows the "format as top-level choice" idea
 
-#### 📊 **Analytics Tab**
-- **Download statistics** - Total, successful, failed downloads
-- **Data tracking** - Monitor total data downloaded
-- **Session analytics** - Current session statistics
-- **Recent activity** - Real-time activity log
-- **Export/import** - Save analytics data
-- **History management** - Clear or export download history
+## License
 
-## 🔧 Advanced Features
-
-### Queue Management
-- **Context menu**: Right-click queue items for options
-- **Remove selected**: Remove unwanted downloads
-- **Retry failed**: Retry failed downloads
-- **Open location**: Navigate to downloaded files
-- **Copy URL**: Copy original video URL
-- **Filter by status**: Show specific types of downloads
-
-### Playlist Features
-- **Automatic detection**: Recognizes playlist URLs
-- **Bulk adding**: Adds all playlist videos to queue
-- **Smart duplicate handling**: Prevents re-adding existing videos
-- **Metadata preservation**: Maintains uploader, duration, and view count info
-
-### Analytics & Tracking
-- **Persistent storage**: Analytics saved between sessions
-- **Export capability**: Save analytics as JSON
-- **Session tracking**: Monitor current session performance
-- **Activity logging**: Timestamped activity feed
-- **Data visualization**: Progress tracking and statistics
-
-## 📋 System Requirements
-
-### Minimum Requirements
-- **OS**: Windows 10+, macOS 10.14+, or Linux (Ubuntu 18.04+)
-- **Python**: 3.8 or later
-- **RAM**: 4GB (8GB recommended for large batches)
-- **Storage**: 100MB for application + space for downloads
-- **Network**: Internet connection
-
-### Dependencies
-- Python 3.8+
-- tkinter (usually included with Python)
-- yt-dlp (latest version)
-- Standard library modules (threading, queue, json, pathlib, etc.)
-
-Install dependencies: `pip install -r requirements.txt`
-
-## 🛠️ Development & Building
-
-### Project Structure
-```
-Youtube-Downloader/
-├── Core Application
-│   ├── youtube_downloader_gui.py      # Main GUI application
-│   ├── yt_dlp_enhanced.py            # Enhanced download backend
-│   ├── yt-dlp_downloader.py          # Basic CLI version
-│   └── launcher.py                   # Application launcher
-├── Build & Distribution
-│   ├── create_installer.py           # Creates installer package
-│   ├── build_windows.bat            # Builds Windows executable
-│   ├── run_youtube_downloader.bat   # Windows launcher script
-│   ├── test_build.py                # Build validation tests
-│   └── version.py                   # Version management
-├── Resources
-│   ├── templates/
-│   │   └── index.html              # Web UI template (legacy)
-│   └── create_icon.py             # Icon generation utility
-├── Documentation
-│   ├── README.md                   # This file
-│   ├── LICENSE                     # MIT license
-│   └── requirements.txt           # Python dependencies
-└── Downloads
-    ├── downloads/                 # Default download directory
-    └── test_downloads/           # Test download directory
-```
-
-### Building Windows Executable
-```bash
-# Build standalone executable
-build_windows.bat
-# Creates: dist/YouTubeDownloader.exe (if PyInstaller available)
-```
-
-### Creating Installer Package
-```bash
-# Create installer package
-python create_installer.py
-# Creates: YouTubeDownloader-Installer.zip
-```
-
-### Development Setup
-```bash
-# Clone repository
-git clone https://github.com/Oluwatemmy/Youtube-Downloader.git
-cd Youtube-Downloader
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the main application
-python youtube_downloader_gui.py
-
-# Or use the launcher
-python launcher.py
-```
-
-## 🆘 Troubleshooting
-
-### Installation Issues
-
-#### "Python not found"
-- **Windows**: Install from [python.org](https://python.org)
-- **Linux**: `sudo apt install python3 python3-pip`
-- **macOS**: `brew install python3`
-
-#### "tkinter not available"
-- **Linux**: `sudo apt install python3-tk`
-- **Most systems**: tkinter comes with Python by default
-
-#### "ModuleNotFoundError"
-- Install dependencies: `pip install -r requirements.txt`
-- Ensure Python 3.8+ is installed: `python --version`
-
-### Runtime Issues
-
-#### Downloads fail
-- Check internet connection
-- Verify YouTube URL is accessible in browser
-- Try reducing concurrent downloads in Settings
-- Check available disk space
-- Update yt-dlp: `pip install --upgrade yt-dlp`
-
-#### GUI doesn't start
-- Check Python version: `python --version` (need 3.8+)
-- Verify tkinter: `python -c "import tkinter"`
-- Try running with: `python -u youtube_downloader_gui.py`
-
-#### Slow performance
-- Increase concurrent downloads in Settings tab
-- Use SSD for download directory
-- Check internet connection speed
-- Close bandwidth-heavy applications
-
-#### Progress not updating
-- Check if downloads folder has write permissions
-- Verify sufficient disk space available
-- Check Windows Defender/antivirus isn't blocking
-
-### Getting Help
-1. **Check error messages** in the application status bar
-2. **View recent activity** in the Analytics tab
-3. **Verify system requirements** are met
-4. **Run validation**: `python test_build.py`
-5. **Report issues** on GitHub with error details and system info
-
-## 🔒 Legal Notice
-
-⚠️ **Important**: This tool is for educational and personal use only.
-
-- Always respect YouTube's Terms of Service
-- Only download videos you have permission to download
-- Respect copyright laws in your jurisdiction
-- Do not distribute copyrighted content without permission
-- The developers are not responsible for misuse of this software
-
-## 🏆 Why Choose This Downloader?
-
-### ✅ **Modern Interface**
-- Clean, intuitive GUI design
-- Real-time progress visualization
-- Integrated playlist support
-- Comprehensive analytics dashboard
-
-### ✅ **Reliability**
-- Robust error handling and recovery
-- Resume interrupted downloads
-- Multiple format fallback options
-- Comprehensive logging and debugging
-
-### ✅ **Performance**
-- Async download architecture
-- Configurable concurrent downloads
-- Smart format selection
-- Efficient progress tracking
-
-### ✅ **User Experience**
-- Single-tab streamlined design
-- Persistent settings and preferences
-- Context menus and keyboard shortcuts
-- Comprehensive help and documentation
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature-name`
-3. Make changes and test thoroughly
-4. Submit pull request with clear description
-
-### Development Guidelines
-- Follow existing code style and structure
-- Test on multiple platforms when possible
-- Update documentation for new features
-- Ensure backward compatibility
-- Add appropriate error handling
-
-### Code Structure
-- **youtube_downloader_gui.py**: Main GUI application with all interface logic
-- **yt_dlp_enhanced.py**: Download backend with async support
-- **VideoInfo class**: Data structure for video metadata
-- **Analytics system**: Persistent tracking and reporting
-
-## 📞 Support
-
-For support and questions:
-- **GitHub Issues**: Report bugs and feature requests
-- **Documentation**: Check troubleshooting section first
-- **Testing**: Run `python test_build.py` to validate setup
-- **Community**: Share experiences and solutions
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-**🚀 Enhanced YouTube downloading with modern GUI, analytics, and streamlined workflow!**
-
-Made with ❤️ for content creators and media enthusiasts
+MIT — see [LICENSE](LICENSE).

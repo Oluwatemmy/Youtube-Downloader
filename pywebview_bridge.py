@@ -237,7 +237,7 @@ class DownloadManager:
 
     def add(self, url: str, format_id: Optional[str] = None,
             audio: bool = False, bitrate: str = "192",
-            playlist_folder: str = "") -> int:
+            playlist_folder: str = "", container: str = "") -> int:
         url = url.strip()
         if not url:
             raise ValueError("empty url")
@@ -253,6 +253,11 @@ class DownloadManager:
             # When set, the download goes into <folder>/<playlist_folder>/
             # so playlist items don't scatter across the root download dir.
             item["playlist_folder"] = _sanitize_folder_name(playlist_folder) if playlist_folder else ""
+            # Target output container (mp4 / webm / mkv). Tells yt-dlp to
+            # remux the merged file into this extension so the output
+            # matches the label the user picked, instead of defaulting to
+            # mkv/webm when video and audio streams have mixed containers.
+            item["container"] = (container or "").lower()
             self._items.append(item)
         self._emit_queue()
         self._persist()
@@ -263,9 +268,9 @@ class DownloadManager:
 
     def add_batch(self, urls: List[str], format_id: Optional[str] = None,
                   audio: bool = False, bitrate: str = "192",
-                  playlist_folder: str = "") -> List[int]:
+                  playlist_folder: str = "", container: str = "") -> List[int]:
         return [self.add(u, format_id=format_id, audio=audio, bitrate=bitrate,
-                         playlist_folder=playlist_folder)
+                         playlist_folder=playlist_folder, container=container)
                 for u in urls if u.strip()]
 
     def remove(self, id_: int) -> None:
@@ -543,7 +548,7 @@ class DownloadManager:
             "got": "0 B", "error": None, "output_path": None,
             "thumbnail": "",
             "audio_only": False, "audio_bitrate": "192",
-            "playlist_folder": "",
+            "playlist_folder": "", "container": "",
         }
 
     def _update(self, id_: int, **fields) -> None:
@@ -807,14 +812,27 @@ class DownloadManager:
                 if status == "downloading":
                     downloaded = d.get("downloaded_bytes") or 0
                     total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                    pct = int(downloaded / total * 100) if total else 0
+                    # For DASH videos (all YouTube 720p+), `total_bytes`
+                    # is the current FRAGMENT's total, not the whole file.
+                    # yt-dlp populates fragment_index/count in that case,
+                    # so use those for percentage instead of the byte
+                    # ratio (which would jump 0→100 per fragment).
+                    frag_i = d.get("fragment_index")
+                    frag_n = d.get("fragment_count")
+                    if frag_n:
+                        pct = int(frag_i / frag_n * 100) if frag_i else 0
+                    else:
+                        pct = int(downloaded / total * 100) if total else 0
                     self._update(
                         id_,
                         pct=pct,
                         speed=_fmt_speed(d.get("speed")),
                         eta=_fmt_eta(d.get("eta")),
-                        got=f"{_fmt_bytes(downloaded)} / {_fmt_bytes(total)}",
-                        size=_fmt_bytes(total),
+                        got=f"{_fmt_bytes(downloaded)} downloaded",
+                        # Deliberately NOT setting `size` here — mid-download
+                        # values are unreliable for fragmented streams and
+                        # for anything that gets postprocessed (MP3, remux).
+                        # pp_hook below stat()s the real file when done.
                     )
                 elif status == "finished":
                     # Provisional path — for simple single-file downloads
@@ -828,15 +846,27 @@ class DownloadManager:
             def pp_hook(d: Dict[str, Any]) -> None:
                 """Fires after each postprocessor step. The last one that
                 fires is the true final file (mp3 after FFmpegExtractAudio,
-                mp4 after FFmpegMerger, etc.)."""
+                mp4 after FFmpegMerger, etc.). We also use it to correct
+                `size` from the actual file on disk, since the value we
+                had during download was per-fragment (DASH) or pre-mux
+                (MP3 extraction) and often much smaller than reality."""
                 if d.get("status") != "finished":
                     return
                 info = d.get("info_dict") or {}
                 final = (info.get("filepath")
                          or info.get("_filename")
                          or info.get("filename"))
-                if final:
-                    self._update(id_, output_path=final)
+                if not final:
+                    return
+                updates: Dict[str, Any] = {"output_path": final}
+                try:
+                    real_bytes = Path(final).stat().st_size
+                    updates["size"] = _fmt_bytes(real_bytes)
+                    updates["mb"] = int(real_bytes / 1_048_576)
+                    updates["got"] = f"{_fmt_bytes(real_bytes)} · complete"
+                except OSError:
+                    pass
+                self._update(id_, **updates)
 
             # Per-item mode: audio-only rips bestaudio and postprocesses
             # to MP3 with the user's chosen bitrate; video mode uses the
@@ -846,6 +876,7 @@ class DownloadManager:
                 item_format = cur.get("format_id")
                 is_audio = bool(cur.get("audio_only"))
                 bitrate = str(cur.get("audio_bitrate") or "192")
+                container = (cur.get("container") or "").lower()
 
             extra_opts: Dict[str, Any] = {
                 "outtmpl": outtmpl,
@@ -872,6 +903,16 @@ class DownloadManager:
                 # expressions; pass raw format IDs (like "137+bestaudio")
                 # straight through.
                 extra_opts["format"] = self._resolve_format(item_format)
+                # Force the output container so the merged file matches
+                # the label the user picked. Without this, YouTube's mixed
+                # streams (mp4 video + webm audio) default to .mkv/.webm
+                # even when the user asked for MP4. `merge_output_format`
+                # supports only well-known containers.
+                target_container = container or (
+                    "mp4" if not item_format or item_format == "best" else ""
+                )
+                if target_container in ("mp4", "webm", "mkv", "m4a"):
+                    extra_opts["merge_output_format"] = target_container
 
             # Reuse the same (player_client, use_cookies) combo that
             # succeeded during metadata extraction — otherwise the download
@@ -884,6 +925,21 @@ class DownloadManager:
 
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
+
+            # Safety net: if the download didn't trigger any postprocessor
+            # (single-file progressive download), pp_hook never fired and
+            # `size` may still be missing. stat() the recorded output path.
+            with self._lock:
+                final_path = (self._find(id_) or {}).get("output_path")
+            if final_path and Path(final_path).exists():
+                try:
+                    real_bytes = Path(final_path).stat().st_size
+                    self._update(id_,
+                                 size=_fmt_bytes(real_bytes),
+                                 mb=int(real_bytes / 1_048_576),
+                                 got=f"{_fmt_bytes(real_bytes)} · complete")
+                except OSError:
+                    pass
 
             self._update(id_, status="Done", pct=100, speed="—", eta="—", error=None)
             self._log(id_, "ok", "[done] download complete")
@@ -1028,7 +1084,11 @@ class PyBridge:
 
     def _record_finished(self, item: Dict[str, Any]) -> None:
         """Called from DownloadManager when a download reaches Done/Failed.
-        Appends to history so analytics has real data."""
+        Appends to history so analytics has real data.
+
+        If a URL that previously Failed now succeeds, sweep the earlier
+        Failed rows out — otherwise the same video would inflate both the
+        Failed and Successful counts in Analytics."""
         now = datetime.now()
         entry = {
             "date":     now.date().isoformat(),
@@ -1040,6 +1100,13 @@ class PyBridge:
             "mb":       int(item.get("mb", 0) or 0),
             "quality":  item.get("quality", "—"),
         }
+        url = entry["url"]
+        if entry["status"] == "Done" and url:
+            # Retry-after-failure supersedes the earlier failure entries
+            # for the same URL. Keeps Done entries (the user might have
+            # downloaded it twice deliberately).
+            self._history = [h for h in self._history
+                             if not (h.get("url") == url and h.get("status") == "Failed")]
         self._history.append(entry)
         # Cap history at 500 entries so the file stays sane.
         if len(self._history) > 500:
@@ -1075,6 +1142,7 @@ class PyBridge:
             audio=bool(options.get("audio")),
             bitrate=options.get("bitrate") or self._settings.get("mp3_bitrate", "192"),
             playlist_folder=options.get("playlist_folder") or "",
+            container=options.get("container") or "",
         )
         return {"id": id_}
 
@@ -1086,6 +1154,7 @@ class PyBridge:
             audio=bool(options.get("audio")),
             bitrate=options.get("bitrate") or self._settings.get("mp3_bitrate", "192"),
             playlist_folder=options.get("playlist_folder") or "",
+            container=options.get("container") or "",
         )}
 
     def get_playlist_entries(self, url: str) -> Dict[str, Any]:
@@ -1192,8 +1261,10 @@ class PyBridge:
                 best_by_group[key] = f
 
         out: List[Dict[str, Any]] = [
+            # No container preference for Best; the backend defaults to mp4
+            # via merge_output_format so the file is playable everywhere.
             {"format_id": "best", "label": "Best available",
-             "height": 9999, "size_mb": None, "size_str": "—"}
+             "height": 9999, "size_mb": None, "size_str": "—", "container": ""}
         ]
         for f in sorted(best_by_group.values(),
                         key=lambda x: (-(x.get("height") or 0), x.get("ext") or "")):
@@ -1204,19 +1275,24 @@ class PyBridge:
             total = vs + (audio_size if needs_mux else 0)
             out.append({
                 "format_id": f["format_id"] + ("+bestaudio" if needs_mux else ""),
-                "label": f"{h}p {ext.upper()}" + ("" if not needs_mux else ""),
+                "label": f"{h}p {ext.upper()}",
                 "height": h,
                 "size_mb": int(total / 1_048_576) if total else None,
                 "size_str": _fmt_bytes(total) if total else "~ unknown",
+                # Target container — tells the download to remux into this
+                # extension so the output file matches the label the user saw.
+                "container": ext,
             })
 
         if best_audio:
+            audio_ext = (best_audio.get("ext") or "m4a").lower()
             out.append({
                 "format_id": best_audio["format_id"],
-                "label": f"Audio only ({(best_audio.get('ext') or 'm4a').lower()})",
+                "label": f"Audio only ({audio_ext})",
                 "height": 0,
                 "size_mb": int(audio_size / 1_048_576) if audio_size else None,
                 "size_str": _fmt_bytes(audio_size) if audio_size else "~ unknown",
+                "container": audio_ext,
             })
 
         top_height = max((f.get("height") or 0) for f in out) if out else 0

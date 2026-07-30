@@ -1135,9 +1135,18 @@ function validateUrl() {
 }
 async function submitDialog() {
   const isAudio = state.dlgMode === "audio";
+  // Look up the container from the picked format so the backend can
+  // remux the final file into it — otherwise a "1080p MP4" pick ends
+  // up as .mkv because YouTube's mp4-video + webm-audio streams get
+  // stuffed into a universal container.
+  const pickedFormat = (state.formats || []).find(f => f.format_id === state.formatId);
+  const container = pickedFormat ? (pickedFormat.container || "") : "";
   const options = isAudio
     ? { audio: true, bitrate: state.audioBitrate }
-    : { format_id: state.formatId && state.formatId !== "best" ? state.formatId : null };
+    : {
+        format_id: state.formatId && state.formatId !== "best" ? state.formatId : null,
+        container,
+      };
 
   // Playlist: iterate entries (respecting any picker selection) and
   // queue them as a batch — bypasses the single/batch tab distinction.
