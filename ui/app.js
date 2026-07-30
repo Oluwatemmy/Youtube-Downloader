@@ -69,11 +69,22 @@ const FakeApi = {
   retry:        async (id) => { console.log("retry", id); return true; },
   open_folder:  async (id) => { console.log("open_folder", id); return true; },
   open_file:    async (id) => { console.log("open_file", id); return true; },
+  get_log:      async () => [],
   browse_folder:async () => "C:\\Users\\alex\\Videos\\YouT",
   browse_cookies_file: async () => "",
   default_browser: async () => "chrome",
   find_cookies_txt: async () => [],
   check_clipboard_url: async () => ({}),
+  ytdlp_check_update: async () => ({ current: "2026.07.04", latest: "2026.07.14", update_available: true }),
+  ytdlp_update:       async () => ({ ok: true, restart_needed: true }),
+  get_playlist_entries: async () => ({
+    title: "Sample Playlist", count: 3, total_duration: "1:12:34",
+    entries: [
+      { url: "https://youtu.be/a1", title: "Lecture 1 — Intro",  dur: "24:12", uploader: "Prof X", thumbnail: "" },
+      { url: "https://youtu.be/b2", title: "Lecture 2 — Types",  dur: "31:04", uploader: "Prof X", thumbnail: "" },
+      { url: "https://youtu.be/c3", title: "Lecture 3 — Traits", dur: "17:18", uploader: "Prof X", thumbnail: "" },
+    ],
+  }),
   ytdlp_version:async () => "2026.07.14",
   quit_app:     async () => { window.close(); },
   minimize:     async () => {},
@@ -112,8 +123,13 @@ const state = {
   formatsNote: null,           // e.g. "only low-res — try cookies"
   dlgMode: "video",            // "video" | "audio" — Add URL dialog format mode
   audioBitrate: "192",         // kbps when dlgMode === "audio"
-  speedHistory: [],            // aggregate bytes/sec, one sample per second, last 60
-  speedPeak: 0,                // peak bytes/sec seen this session
+  playlist: null,              // {title, count, total_duration, entries: [{url,title,dur,thumbnail,uploader}]}
+  playlistLoading: false,
+  playlistError: null,
+  playlistPicked: null,        // Set of URLs the user picked; null = all
+  speedHistory: [],            // selected item bytes/sec, one sample per second, last 60
+  speedPeak: 0,                // peak bytes/sec seen for the selected item
+  selectedLog: [],             // real per-item log from yt-dlp, [[text,tone],...]
   theme: "dark",               // dark | light
   queue: [],
   settings: null,
@@ -132,13 +148,6 @@ const CAT_DOTS = {
   Done: "var(--ok)", Paused: "var(--warn)", Failed: "var(--bad)",
 };
 
-const LOGS = {
-  Downloading:[["[info] extracting player response","tx3"],["[info] 22 formats available, picked 247+251","tx2"],["[download] destination: Ambient-Study-Mix.f247.webm","tx2"],["[download] frag 214/338 · 12.4 MiB/s","tx"],["[download] 63.0% of 1.10GiB at 12.4MiB/s ETA 02:14","acc"]],
-  Done:[["[info] picked format 137+140 (mp4)","tx2"],["[download] 100% of 412MiB in 00:38","tx2"],["[merge] remuxing into mp4 container","tx2"],["[done] wrote Compiler-in-Rust-Part-3.mp4","ok"]],
-  Paused:[["[download] 45.0% of 1.40GiB at 9.8MiB/s","tx2"],["[warn] paused by user — partial file kept (.part)","warn"]],
-  Queued:[["[queue] position 2 of 4","tx3"],["[info] waiting for a free slot (3 of 3 running)","tx3"]],
-  Failed:[["[info] extracting player response","tx3"],["[warn] attempt 1/3 failed: HTTP Error 403","warn"],["[warn] attempt 2/3 failed: HTTP Error 403","warn"],["[error] attempt 3/3 failed: HTTP Error 403 — age-restricted","bad"],["[hint] try --cookies-from-browser edge","tx3"]],
-};
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, opts = {}) => {
@@ -370,7 +379,11 @@ function renderRows() {
     statusCell.appendChild(actions);
     statusCell.appendChild(badge);
 
-    if (state.hover === i.id && i.status === "Failed" && i.error) {
+    if (i.status === "Failed" && i.error) {
+      // Always in the DOM for failed rows; CSS reveals it on row hover.
+      // (Was gated by state.hover + a full renderRows() on mouseleave,
+      // which rebuilt the DOM under the context menu and made it feel
+      // like the menu wouldn't dismiss.)
       const err = el("div", { className: "err-tooltip" });
       err.innerHTML = `<div class="h">Failed · attempt 3 of 3</div><div class="b">${escapeHtml(i.error)}</div>`;
       statusCell.appendChild(err);
@@ -384,12 +397,16 @@ function renderRows() {
     row.appendChild(eta);
     row.appendChild(statusCell);
 
-    row.addEventListener("click",       () => { state.sel = i.id; renderRows(); renderDetail(); renderToolButtons(); });
+    row.addEventListener("click",       () => {
+      state.sel = i.id;
+      _logFetchedFor = null;            // force log re-fetch for new selection
+      state.selectedLog = [];
+      renderRows(); renderDetail(); renderToolButtons();
+      refreshSelectedLog();
+    });
     // Double-clicking a completed row launches the file in the OS default
     // player. No-op for rows that haven't finished yet.
     row.addEventListener("dblclick",    () => { if (i.status === "Done") api().open_file(i.id); });
-    row.addEventListener("mouseenter",  () => { state.hover = i.id; if (i.status === "Failed") renderRows(); });
-    row.addEventListener("mouseleave",  () => { state.hover = null; if (i.status === "Failed") renderRows(); });
     row.addEventListener("contextmenu", (e) => { e.preventDefault(); state.sel = i.id; openMenu(e.clientX, e.clientY, i); });
 
     body.appendChild(row);
@@ -436,11 +453,7 @@ function renderDetail() {
       : `<div class="ph">no thumbnail</div>`;
   }
 
-  const log = $("pane-log");
-  log.innerHTML = "";
-  (LOGS[it.status] || []).forEach(([t, tone]) => {
-    log.appendChild(el("div", { className: "log-line " + tone, text: t }));
-  });
+  renderLogPane();
 
   const tab = state.detailTab;
   $("pane-info").hidden  = tab !== "Info";
@@ -554,8 +567,52 @@ function renderSettings() {
         b.addEventListener("click", () => openWizard());
         return b;
       } },
+    { name: "yt-dlp version",
+      desc: "YouTube changes their site regularly. Keep yt-dlp current or downloads will start failing.",
+      render: () => renderYtdlpUpdateControl() },
   ]);
   host.appendChild(advanced);
+}
+
+// The Update button in Settings — clicking triggers a PyPI check, then
+// offers the install if a newer version is out. Restart-required message
+// shown after a successful install because the new module isn't loaded
+// until the app process restarts.
+function renderYtdlpUpdateControl() {
+  const wrap = el("div"); wrap.style.cssText = "display:flex;align-items:center;gap:10px";
+  const label = el("span"); label.style.cssText = "font:400 12px var(--mono);color:var(--tx3)";
+  label.textContent = state.ytdlpVersion || "—";
+  const btn = el("button", { className: "set-btn", text: "Check for updates" });
+  wrap.appendChild(label); wrap.appendChild(btn);
+
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; const orig = btn.textContent; btn.textContent = "Checking…";
+    try {
+      const res = await api().ytdlp_check_update();
+      if (res.error) { btn.textContent = "Check failed"; setTimeout(() => (btn.textContent = orig, btn.disabled = false), 2000); return; }
+      label.textContent = res.current;
+      if (!res.update_available) {
+        btn.textContent = "Up to date ✓";
+        setTimeout(() => (btn.textContent = orig, btn.disabled = false), 2000);
+        return;
+      }
+      // Update available — swap button to install mode
+      btn.textContent = `Update to ${res.latest}`; btn.disabled = false;
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = "Installing…";
+        const upd = await api().ytdlp_update();
+        if (upd.ok) {
+          btn.textContent = "Updated — restart the app";
+        } else {
+          btn.textContent = "Install failed";
+          setTimeout(() => (btn.textContent = orig, btn.disabled = false), 2500);
+        }
+      };
+    } catch {
+      btn.textContent = "Check failed"; setTimeout(() => (btn.textContent = orig, btn.disabled = false), 2000);
+    }
+  });
+  return wrap;
 }
 
 function groupCard(title, note, rows) {
@@ -724,7 +781,7 @@ function openMenu(x, y, item) {
     const b = el("button", { className: (mi.sep ? "sep " : "") + (mi.danger ? "danger" : "") });
     // glyph + label (in its own span so ellipsis has a target) + shortcut
     b.innerHTML = `<span class="g">${escapeHtml(mi.glyph)}</span><span class="label">${escapeHtml(mi.name)}</span><span class="k">${escapeHtml(mi.key || "")}</span>`;
-    b.addEventListener("click", () => { mi.act(); m.classList.add("hidden"); });
+    b.addEventListener("click", () => { mi.act(); closeMenu(); });
     m.appendChild(b);
   });
   // Menu is 244px wide; clamp within viewport with a small right margin.
@@ -732,14 +789,31 @@ function openMenu(x, y, item) {
   m.style.left = Math.min(x, window.innerWidth - 254) + "px";
   m.style.top  = Math.min(y, window.innerHeight - (menu.length * 32 + 30)) + "px";
   m.classList.remove("hidden");
+  $("ctx-scrim").classList.remove("hidden");
 }
-document.addEventListener("click", () => $("ctx-menu").classList.add("hidden"));
+function closeMenu() {
+  $("ctx-menu").classList.add("hidden");
+  $("ctx-scrim").classList.add("hidden");
+}
+// Any click on the invisible full-screen catcher dismisses the menu.
+// Using mousedown so we win the race against child handlers that call
+// stopPropagation on click (row checkbox, action buttons, etc.).
+document.addEventListener("mousedown", (e) => {
+  if ($("ctx-menu").classList.contains("hidden")) return;
+  if (e.target.closest("#ctx-menu")) return;
+  closeMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("ctx-menu").classList.contains("hidden")) closeMenu();
+});
 
 // -------- dialog --------
 function openDialog() {
   state.dialog = true; state.urlValue = ""; state.batchValue = "";
   state.formats = null; state.formatId = "best"; state.formatsLoading = false;
   state.formatsError = null; state.formatsUrl = null; state.formatsNote = null;
+  state.playlist = null; state.playlistLoading = false;
+  state.playlistError = null; state.playlistPicked = null;
   // Reset to Video mode each open. Bitrate keeps the last saved default.
   state.dlgMode = "video";
   state.audioBitrate = state.settings?.mp3_bitrate || "192";
@@ -775,6 +849,8 @@ function stage2Ready() {
   if (state.dlgTab === "batch") {
     return state.batchValue.split("\n").filter(l => l.trim()).length > 0;
   }
+  // Playlist: as soon as entries came back, we're ready.
+  if (state.playlist) return true;
   if (state.dlgMode === "audio") {
     return /youtu\.?be/i.test(state.urlValue);
   }
@@ -784,28 +860,65 @@ function updateStage2Visibility() {
   const show = stage2Ready();
   $("stage2").hidden = !show;
   if (show) renderFormatOptions();
+  renderPlaylistCard();
 }
 function updateSubmitButtons() {
-  const canGo = stage2Ready() && (state.dlgMode === "audio" || !state.formatsLoading);
+  const canGo = stage2Ready()
+    && !state.playlistLoading
+    && (state.dlgMode === "audio" || !state.formatsLoading);
   $("dlg-download").disabled = !canGo;
 }
 function updateDownloadLabel() {
+  if (state.playlist) {
+    const n = playlistTargetCount();
+    $("dlg-download").textContent =
+      state.dlgMode === "audio" ? `Download ${n} as MP3` : `Download ${n} video${n === 1 ? "" : "s"}`;
+    return;
+  }
   $("dlg-download").textContent = state.dlgMode === "audio" ? "Download MP3" : "Download";
+}
+function playlistTargetCount() {
+  if (!state.playlist) return 0;
+  return state.playlistPicked ? state.playlistPicked.size : state.playlist.count;
+}
+function renderPlaylistCard() {
+  const card = $("playlist-card");
+  if (!state.playlist) { card.hidden = true; return; }
+  card.hidden = false;
+  $("playlist-title").textContent = state.playlist.title;
+  const picked = playlistTargetCount();
+  const total = state.playlist.count;
+  const dur = state.playlist.total_duration && state.playlist.total_duration !== "—"
+    ? ` · ${state.playlist.total_duration}` : "";
+  $("playlist-meta").textContent = state.playlistPicked
+    ? `${picked} of ${total} selected${dur}`
+    : `${total} video${total === 1 ? "" : "s"}${dur}`;
 }
 function updateFetchStatus() {
   const el = $("fetch-status");
   if (state.dlgTab !== "single") { el.hidden = true; return; }
+  if (state.playlistLoading) {
+    el.hidden = false; el.classList.add("loading");
+    el.textContent = "Reading playlist";
+    return;
+  }
+  if (state.playlistError) {
+    el.hidden = false; el.classList.remove("loading");
+    el.textContent = state.playlistError;
+    return;
+  }
+  if (state.playlist) {
+    el.hidden = false; el.classList.remove("loading");
+    el.textContent = `Playlist · ${state.playlist.count} video${state.playlist.count === 1 ? "" : "s"}`;
+    return;
+  }
   if (state.formatsLoading) {
-    el.hidden = false;
-    el.classList.add("loading");
+    el.hidden = false; el.classList.add("loading");
     el.textContent = "Fetching available formats";
     return;
   }
   el.classList.remove("loading");
-  if (state.formatsError) {
-    el.hidden = false; el.textContent = state.formatsError;
-    return;
-  }
+  if (state.formatsError) { el.hidden = false; el.textContent = state.formatsError; return; }
   if (state.formats && state.formats.length) {
     el.hidden = false;
     const n = state.formats.length;
@@ -818,6 +931,12 @@ function updateDialogHint() {
   if (state.dlgTab === "batch") {
     const n = state.batchValue.split("\n").filter(l => l.trim()).length;
     $("dlg-hint").textContent = n === 0 ? "Enter one URL per line" : `${n} URL${n === 1 ? "" : "s"} ready`;
+    return;
+  }
+  if (state.playlistLoading) { $("dlg-hint").textContent = "Reading playlist…"; return; }
+  if (state.playlistError)   { $("dlg-hint").textContent = "Couldn't read playlist"; return; }
+  if (state.playlist) {
+    $("dlg-hint").textContent = "Pick a quality, then download";
     return;
   }
   if (state.formatsLoading) { $("dlg-hint").textContent = "Fetching…"; return; }
@@ -851,6 +970,25 @@ function renderFormatOptions() {
   }
 
   $("quality-label").textContent = "Quality";
+
+  // Playlist: same generic ladder as batch — per-video sizes vary and
+  // can't be fetched cheaply, so let the user pick a target ceiling.
+  if (state.playlist) {
+    const generic = [
+      ["best",  "Best available"],
+      ["2160p", "Up to 4K (2160p)"],
+      ["1440p", "Up to 1440p"],
+      ["1080p", "Up to 1080p"],
+      ["720p",  "Up to 720p"],
+      ["480p",  "Up to 480p"],
+      ["360p",  "Up to 360p"],
+    ];
+    generic.forEach(([v, label]) => sel.appendChild(el("option", { text: label, attrs: { value: v } })));
+    sel.value = state.formatId && generic.some(g => g[0] === state.formatId) ? state.formatId : "best";
+    sel.disabled = false;
+    const n = $("dlg-note"); if (n) { n.hidden = true; n.textContent = ""; }
+    return;
+  }
 
   // Video-mode batch: can't fetch per-video formats, generic ladder.
   if (state.dlgTab === "batch") {
@@ -890,16 +1028,32 @@ function renderFormatOptions() {
   noteEl.hidden = !state.formatsNote;
 }
 
+// True for real playlist URLs (youtube.com/playlist?list=…). A watch URL
+// with &list= is a video that happens to be in a playlist — leave those
+// to the normal video path since yt-dlp defaults to extracting the single
+// video, matching what the user just clicked in their browser.
+function isPlaylistUrl(url) {
+  return /youtube\.com\/playlist\?/i.test(url);
+}
+
 let _formatFetchTimer = null;
 let _formatFetchSeq = 0;
 function scheduleFormatFetch(url) {
   clearTimeout(_formatFetchTimer);
   if (!url || !/youtu\.?be/i.test(url)) {
     state.formats = null; state.formatsLoading = false; state.formatsError = null;
-    state.formatsNote = null;
+    state.formatsNote = null; state.playlist = null; state.playlistLoading = false;
+    state.playlistError = null; state.playlistPicked = null;
     updateStage2Visibility(); updateFetchStatus(); updateDialogHint(); updateSubmitButtons();
     return;
   }
+  // Route to playlist enumeration or format list based on URL shape.
+  if (isPlaylistUrl(url)) return schedulePlaylistFetch(url);
+  return scheduleVideoFormatFetch(url);
+}
+
+function scheduleVideoFormatFetch(url) {
+  state.playlist = null; state.playlistPicked = null;
   state.formatsLoading = true; state.formatsError = null;
   updateFetchStatus(); updateDialogHint(); updateSubmitButtons();
   const mySeq = ++_formatFetchSeq;
@@ -932,6 +1086,42 @@ function scheduleFormatFetch(url) {
     }
   }, 500);  // debounce so we don't fire while the user is still typing/pasting
 }
+
+function schedulePlaylistFetch(url) {
+  // Playlist branch — enumerate entries via extract_flat so it's fast
+  // even for hundreds of videos, and swap the Quality dropdown for a
+  // generic ladder (per-video sizes vary and can't be fetched cheaply).
+  state.formats = null; state.formatsNote = null; state.formatsError = null;
+  state.playlist = null; state.playlistError = null; state.playlistPicked = null;
+  state.playlistLoading = true;
+  updateFetchStatus(); updateDialogHint(); updateSubmitButtons();
+  const mySeq = ++_formatFetchSeq;
+  _formatFetchTimer = setTimeout(async () => {
+    try {
+      const res = await api().get_playlist_entries(url);
+      if (mySeq !== _formatFetchSeq) return;
+      if (res.error || !res.entries) {
+        state.playlistError = "Couldn't read playlist: " + (res.error || "no entries");
+      } else {
+        state.playlist = res;
+        state.formatId = "best";  // playlist default; generic ladder
+      }
+    } catch (exc) {
+      if (mySeq !== _formatFetchSeq) return;
+      state.playlistError = "Couldn't read playlist: " + exc.message;
+    } finally {
+      if (mySeq === _formatFetchSeq) {
+        state.playlistLoading = false;
+        updateStage2Visibility();
+        updateFetchStatus();
+        updateDialogHint();
+        updateSubmitButtons();
+        updateDownloadLabel();
+      }
+    }
+  }, 500);
+}
+
 function validateUrl() {
   const v = state.urlValue;
   const isYouTube = /youtu\.?be/i.test(v);
@@ -948,6 +1138,24 @@ async function submitDialog() {
   const options = isAudio
     ? { audio: true, bitrate: state.audioBitrate }
     : { format_id: state.formatId && state.formatId !== "best" ? state.formatId : null };
+
+  // Playlist: iterate entries (respecting any picker selection) and
+  // queue them as a batch — bypasses the single/batch tab distinction.
+  // Send playlist_folder so the backend groups the videos in a
+  // subfolder named after the playlist instead of scattering them.
+  if (state.playlist) {
+    const entries = state.playlist.entries || [];
+    const urls = state.playlistPicked
+      ? entries.filter(e => state.playlistPicked.has(e.url)).map(e => e.url)
+      : entries.map(e => e.url);
+    if (urls.length === 0) return;
+    const playlistOpts = { ...options, playlist_folder: state.playlist.title };
+    await api().add_batch(urls, playlistOpts);
+    closeDialog();
+    await refreshQueue();
+    return;
+  }
+
   if (state.dlgTab === "single") {
     if (!state.urlValue) return;
     await api().add_url(state.urlValue, options);
@@ -1004,13 +1212,51 @@ function fmtSpeed(bps) {
   if (bps < 1024 ** 3) return `${(bps / (1024 ** 2)).toFixed(1)} MB/s`;
   return `${(bps / (1024 ** 3)).toFixed(2)} GB/s`;
 }
-function aggregateSpeed() {
-  return state.queue
-    .filter(i => i.status === "Downloading")
-    .reduce((sum, i) => sum + parseSpeed(i.speed), 0);
+// ---------------------------------------------------------------
+// Per-item log for the detail-panel Log tab. Backend captures yt-dlp's
+// real output per queue item; we fetch it on selection change and
+// append incremental "log" events as they arrive.
+// ---------------------------------------------------------------
+let _logFetchedFor = null;
+
+function renderLogPane() {
+  const log = $("pane-log");
+  log.innerHTML = "";
+  const lines = state.selectedLog || [];
+  if (!lines.length) {
+    log.appendChild(el("div", { className: "log-line tx3", text: "no log entries yet" }));
+    return;
+  }
+  lines.forEach(([t, tone]) => {
+    log.appendChild(el("div", { className: "log-line " + tone, text: t }));
+  });
+  // Keep the newest line in view.
+  log.scrollTop = log.scrollHeight;
 }
+
+async function refreshSelectedLog() {
+  if (!state.sel) { state.selectedLog = []; renderLogPane(); return; }
+  if (_logFetchedFor === state.sel) return;   // already fetched for this selection
+  _logFetchedFor = state.sel;
+  try {
+    state.selectedLog = await api().get_log(state.sel);
+  } catch {
+    state.selectedLog = [];
+  }
+  renderLogPane();
+}
+
+let _speedSampledId = null;   // which item the current history belongs to
 function sampleSpeed() {
-  const bps = aggregateSpeed();
+  // Reset the rolling buffer whenever the user selects a different row,
+  // so we don't display one video's speed trail under another video's info.
+  if (state.sel !== _speedSampledId) {
+    _speedSampledId = state.sel;
+    state.speedHistory = [];
+    state.speedPeak = 0;
+  }
+  const sel = state.queue.find(i => i.id === state.sel);
+  const bps = (sel && sel.status === "Downloading") ? parseSpeed(sel.speed) : 0;
   state.speedHistory.push(bps);
   if (state.speedHistory.length > 60) state.speedHistory.shift();
   if (bps > state.speedPeak) state.speedPeak = bps;
@@ -1022,7 +1268,22 @@ function renderSpeedChart() {
   const hist = state.speedHistory;
   const currentBps = hist.length ? hist[hist.length - 1] : 0;
   $("speed-num").textContent  = fmtSpeed(currentBps);
-  $("speed-peak").textContent = fmtSpeed(state.speedPeak);
+
+  // Note text describes what we're actually sampling — the selected
+  // item's rate, not the whole app's throughput. Set as a single
+  // textContent (the #speed-peak sub-span from the HTML template gets
+  // subsumed into this, which is fine because we only need it here).
+  const sel = state.queue.find(i => i.id === state.sel);
+  const noteEl = $("pane-speed").querySelector(".speed-note");
+  if (noteEl) {
+    if (!sel) {
+      noteEl.textContent = "no selection";
+    } else if (sel.status !== "Downloading") {
+      noteEl.textContent = `${sel.status.toLowerCase()} · peak ${fmtSpeed(state.speedPeak)} · last 60 s`;
+    } else {
+      noteEl.textContent = `this download · peak ${fmtSpeed(state.speedPeak)} · last 60 s`;
+    }
+  }
 
   if (!hist.length) { $("speed-line").setAttribute("points", ""); return; }
   // Y-scale: at least 1 MB/s baseline so a tiny signal is still visible,
@@ -1111,6 +1372,7 @@ function wire() {
       if (!state.detail) state.detail = true;
       renderDetail();
       if (state.detailTab === "Speed") renderSpeedChart();
+      if (state.detailTab === "Log")   refreshSelectedLog();
     });
   });
   $("detail-toggle").addEventListener("click", () => { state.detail = !state.detail; renderDetail(); });
@@ -1194,6 +1456,20 @@ function wire() {
     const p = await api().browse_cookies_file();
     if (p) $("wiz-cookies-path").value = p;
   });
+
+  // Playlist picker
+  wirePicker();
+
+  // Crash modal
+  $("crash-modal").addEventListener("click", hideCrashModal);
+  $("crash-close").addEventListener("click", hideCrashModal);
+  $("crash-dismiss").addEventListener("click", hideCrashModal);
+  $("crash-copy").addEventListener("click", async () => {
+    const text = `${$("crash-name").textContent}: ${$("crash-message").textContent}\n\n${$("crash-traceback").textContent}`;
+    try { await navigator.clipboard.writeText(text); } catch {}
+    const b = $("crash-copy"); const orig = b.textContent;
+    b.textContent = "Copied ✓"; setTimeout(() => (b.textContent = orig), 1400);
+  });
 }
 
 function flashSave() {
@@ -1215,8 +1491,116 @@ window.onEvent = function(payload) {
     renderAll();
   } else if (payload.type === "status") {
     $("status-line").textContent = payload.text;
+  } else if (payload.type === "log") {
+    // Only append to the buffer we're currently showing; other items'
+    // logs are lazily fetched when the user selects them.
+    if (payload.id === state.sel) {
+      state.selectedLog = state.selectedLog || [];
+      state.selectedLog.push(payload.line);
+      if (state.view === "downloads" && state.detail && state.detailTab === "Log") {
+        renderLogPane();
+      }
+    }
+  } else if (payload.type === "crash") {
+    showCrashModal(payload.name || "Error", payload.message || "", payload.traceback || "");
   }
 };
+
+// Catch JS-side errors too — otherwise a stray null-deref in the UI
+// would fail silently in the WebView console. Same crash modal used
+// for both Python and JS errors so the user experience is consistent.
+window.addEventListener("error", (e) => {
+  showCrashModal(
+    (e.error && e.error.name) || "Error",
+    e.message || String(e),
+    (e.error && e.error.stack) || `${e.filename || "?"}:${e.lineno || "?"}`
+  );
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e.reason || {};
+  showCrashModal("UnhandledRejection", r.message || String(r), r.stack || "(no stack)");
+});
+
+function showCrashModal(name, message, tb) {
+  $("crash-name").textContent = name;
+  $("crash-message").textContent = message;
+  $("crash-traceback").textContent = tb;
+  $("crash-modal").classList.remove("hidden");
+}
+function hideCrashModal() { $("crash-modal").classList.add("hidden"); }
+
+// ---------------------------------------------------------------
+// Playlist video picker — checklist modal to pick a subset of
+// entries when the user doesn't want to queue an entire playlist.
+// ---------------------------------------------------------------
+let _pickerDraft = null;   // Set<url> being edited before user hits Done
+let _pickerFilter = "";
+function openPicker() {
+  if (!state.playlist) return;
+  _pickerDraft = new Set(state.playlistPicked || state.playlist.entries.map(e => e.url));
+  _pickerFilter = "";
+  $("picker-search").value = "";
+  renderPickerList();
+  $("picker-modal").classList.remove("hidden");
+}
+function closePicker() { $("picker-modal").classList.add("hidden"); }
+function renderPickerList() {
+  if (!state.playlist) return;
+  const list = $("picker-list");
+  list.innerHTML = "";
+  const q = _pickerFilter.trim().toLowerCase();
+  const entries = state.playlist.entries.filter(e =>
+    !q || (e.title + " " + (e.uploader || "")).toLowerCase().includes(q));
+  entries.forEach(e => {
+    const on = _pickerDraft.has(e.url);
+    const row = el("div", { className: "picker-row" });
+    const cb = el("button", { className: "chk" + (on ? " on" : "") });
+    cb.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
+    const thumb = el("div", { className: "picker-thumb" });
+    if (e.thumbnail) thumb.innerHTML = `<img src="${escapeHtml(e.thumbnail)}" loading="lazy" alt=""/>`;
+    const info = el("div", { className: "picker-info" });
+    info.innerHTML = `<div class="picker-title">${escapeHtml(e.title)}</div><div class="picker-meta">${escapeHtml(e.uploader || "")}</div>`;
+    const dur = el("span", { className: "picker-dur", text: e.dur || "—" });
+    row.appendChild(cb); row.appendChild(thumb); row.appendChild(info); row.appendChild(dur);
+    const toggle = () => {
+      if (_pickerDraft.has(e.url)) _pickerDraft.delete(e.url);
+      else _pickerDraft.add(e.url);
+      renderPickerList();
+    };
+    row.addEventListener("click", toggle);
+    cb.addEventListener("click", (ev) => { ev.stopPropagation(); toggle(); });
+    list.appendChild(row);
+  });
+  const shown = entries.length;
+  $("picker-count").textContent = `${_pickerDraft.size} of ${state.playlist.count} selected${q ? ` · ${shown} shown` : ""}`;
+}
+function wirePicker() {
+  $("picker-modal").addEventListener("click", closePicker);
+  $("picker-close").addEventListener("click", closePicker);
+  $("picker-cancel").addEventListener("click", closePicker);
+  $("picker-done").addEventListener("click", () => {
+    if (state.playlist) {
+      // null → "all selected" (renders as "N videos"); a Set → subset
+      state.playlistPicked = _pickerDraft.size === state.playlist.count ? null : new Set(_pickerDraft);
+    }
+    closePicker();
+    renderPlaylistCard();
+    updateDownloadLabel();
+    updateSubmitButtons();
+  });
+  $("picker-all").addEventListener("click", () => {
+    _pickerDraft = new Set(state.playlist.entries.map(e => e.url));
+    renderPickerList();
+  });
+  $("picker-none").addEventListener("click", () => {
+    _pickerDraft = new Set();
+    renderPickerList();
+  });
+  $("picker-search").addEventListener("input", (e) => {
+    _pickerFilter = e.target.value; renderPickerList();
+  });
+  $("playlist-choose").addEventListener("click", openPicker);
+}
 
 // ---------------------------------------------------------------
 // boot
@@ -1236,6 +1620,26 @@ async function boot() {
   // Clipboard-URL toast: check on focus and once at startup.
   wireClipboardToast();
   checkClipboardForUrl();
+  // Quiet weekly check for a new yt-dlp release. If one exists we just
+  // annotate the sidebar version tag with a red dot — no popup —
+  // so users notice next time they open Settings.
+  maybeCheckYtdlpUpdate();
+}
+
+async function maybeCheckYtdlpUpdate() {
+  const last = state.settings?.ytdlp_last_check || "";
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  if (last && (Date.now() - new Date(last).getTime()) < weekMs) return;
+  try {
+    const res = await api().ytdlp_check_update();
+    if (res && res.update_available) {
+      // Annotate the sidebar footer so it's discoverable but not naggy.
+      const tag = $("ytdlp-version");
+      if (tag) tag.innerHTML = `${escapeHtml(res.current)} <span style="color:var(--acc);font-weight:700" title="Update available: ${escapeHtml(res.latest)}">•</span>`;
+    }
+    state.settings.ytdlp_last_check = new Date().toISOString();
+    await api().save_settings(state.settings);
+  } catch {}
 }
 
 // ---------------------------------------------------------------
