@@ -34,6 +34,8 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...but our hand-written PyInstaller spec IS checked in.
+!packaging/*.spec
 
 # Installer logs
 pip-log.txt
@@ -126,6 +128,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-build/
 env/
 venv/
 ENV/

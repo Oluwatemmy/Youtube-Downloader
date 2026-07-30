@@ -44,14 +44,38 @@ _FFMPEG_WIN64_URL = (
 )
 
 
+def _app_root() -> Path:
+    """Where ffmpeg gets installed / looked up.
+
+    In a frozen build this is the folder containing the .exe (a stable
+    on-disk location the user can point antivirus at). In dev this is
+    the repo root so all `run` sessions share one ffmpeg install
+    instead of dropping copies inside app/ or venv/."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent
+
+
 def _find_ffmpeg() -> str | None:
-    """Return the path to ffmpeg, checking PATH and a few bundled locations."""
+    """Return the path to ffmpeg, checking PATH and a few well-known
+    install locations. Order matters: the user's own install wins over
+    ours so we don't waste 100 MB on a duplicate auto-download."""
     hit = shutil.which("ffmpeg")
     if hit:
         return hit
+    # Locations we check even when they aren't on PATH:
+    #   1. Next to the app (frozen .exe folder or repo root in dev)
+    #      — where our auto-installer drops it after first launch.
+    #   2. Next to the Python interpreter — legacy location from
+    #      pre-package layouts. Kept for back-compat.
+    #   3. C:\ffmpeg\bin — the classic "extract the zip somewhere"
+    #      install path from most YouTube tutorials.
+    #   4. C:\Program Files\ffmpeg\bin — Program Files variant.
     for candidate in (
+        _app_root() / "ffmpeg" / "bin" / "ffmpeg.exe",
         Path(sys.executable).parent / "ffmpeg" / "bin" / "ffmpeg.exe",
-        Path(__file__).parent / "ffmpeg" / "bin" / "ffmpeg.exe",
+        Path("C:/ffmpeg/bin/ffmpeg.exe"),
+        Path("C:/Program Files/ffmpeg/bin/ffmpeg.exe"),
     ):
         if candidate.exists():
             os.environ["PATH"] = f"{candidate.parent}{os.pathsep}{os.environ.get('PATH', '')}"
@@ -69,7 +93,7 @@ def _download_ffmpeg_headless() -> bool:
     import urllib.request
     import zipfile
 
-    install_dir = Path(__file__).parent / "ffmpeg"
+    install_dir = _app_root() / "ffmpeg"
     install_dir.mkdir(exist_ok=True)
     bin_dst = install_dir / "bin"
     bin_dst.mkdir(exist_ok=True)
@@ -139,27 +163,29 @@ def main() -> None:
     _ensure_ffmpeg()
 
     import webview
-    from pywebview_bridge import PyBridge
+    from app.bridge import PyBridge
 
     api = PyBridge()
     # Route uncaught Python exceptions into a JS-side crash modal so the
     # user actually sees them instead of losing state to stderr.
     api.install_crash_handler()
 
-    # The UI folder ships alongside this script in dev and inside the
-    # PyInstaller bundle in production. sys._MEIPASS points at the
-    # extracted resources when frozen.
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    # Resource lookup. When frozen by PyInstaller, ui/ and assets/ get
+    # unpacked into sys._MEIPASS at the same level as the .exe. In dev,
+    # this file lives in <repo>/app/ so we walk one up to reach ui/.
+    if getattr(sys, "frozen", False):
+        base = Path(sys._MEIPASS)
+    else:
+        base = Path(__file__).resolve().parent.parent
     ui_index = base / "ui" / "index.html"
     if not ui_index.exists():
         print(f"[fatal] ui/index.html not found at {ui_index}", file=sys.stderr)
         sys.exit(1)
 
-    # Try to set the window icon on Windows so the taskbar entry shows
-    # our brand instead of the Python launcher's snake. pywebview passes
-    # this through to the OS window; when packaged with PyInstaller's
-    # --icon= flag the .exe icon also takes over.
-    icon_path = base / "icon.ico"
+    # Window icon. In frozen builds, PyInstaller's --icon flag bakes the
+    # icon into the .exe itself; this path is the additional runtime
+    # source for pywebview to show it in the taskbar.
+    icon_path = base / "assets" / "icon.ico"
 
     create_window_kwargs = dict(
         title="YouT Manager",
@@ -188,7 +214,28 @@ def main() -> None:
         window = webview.create_window(**create_window_kwargs)
     api.attach(window)
 
-    webview.start(debug=False)
+    # PyInstaller-frozen WebView2 sometimes creates the window without
+    # foreground focus on first launch, so users see the process in Task
+    # Manager but the window is buried behind other apps. This callback
+    # fires once the window is initialized and forces it to the front.
+    def _bring_to_front():
+        try:
+            window.restore()
+            window.show()
+            if sys.platform == "win32":
+                import ctypes
+                # BringWindowToTop + SetForegroundWindow together nudge
+                # Windows to actually give us focus. Some Win versions
+                # reject SetForegroundWindow from a background process; a
+                # 100ms delay after start() usually gets around it.
+                hwnd = ctypes.windll.user32.FindWindowW(None, "YouT Manager")
+                if hwnd:
+                    ctypes.windll.user32.BringWindowToTop(hwnd)
+                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+
+    webview.start(func=_bring_to_front, debug=False)
 
 
 if __name__ == "__main__":

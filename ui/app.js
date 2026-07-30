@@ -182,6 +182,11 @@ function filteredQueue() {
       else                    { x = String(a[k] || "").toLowerCase(); y = String(b[k] || "").toLowerCase(); }
       return (x < y ? -1 : x > y ? 1 : 0) * d;
     });
+  } else {
+    // Default sort: newest added first. Item ids are monotonic so highest
+    // id = most recently queued. Keeps a stable order that doesn't
+    // reshuffle as items transition between statuses.
+    list = [...list].sort((a, b) => (b.id || 0) - (a.id || 0));
   }
   return list;
 }
@@ -229,8 +234,13 @@ function renderToolButtons() {
   })();
   const statuses = new Set(selectedItems.map(i => i.status));
   const anyDownloading = statuses.has("Downloading");
-  const anyPausable    = statuses.has("Downloading") || statuses.has("Queued");
-  const anyResumable   = statuses.has("Paused") || statuses.has("Failed");
+  // Pause makes sense only for things actually running (Downloading).
+  // A Queued item hasn't started yet, so its natural action is Resume
+  // ("start it now") — matches the row-hover button. If the user really
+  // wants to hold a Queued item off the auto-start queue, right-click
+  // still exposes Pause.
+  const anyPausable    = statuses.has("Downloading");
+  const anyResumable   = statuses.has("Paused") || statuses.has("Failed") || statuses.has("Queued");
   const anyStoppable   = statuses.has("Downloading") || statuses.has("Queued") || statuses.has("Paused");
   const anyFailed      = statuses.has("Failed");
   const hasSelection   = selectedItems.length > 0;
@@ -248,7 +258,9 @@ function renderToolButtons() {
     { label: "Retry", tip: "Retry failed", enabled: anyFailed,
       icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 1 0-2.4 6.2"/><path d="M20 4.5v7h-7"/></svg>`,
       onClick: () => actionOnSelected("retry") },
-    { label: "Delete", tip: "Remove from queue", enabled: anyChecked,
+    { label: "Delete",
+      tip: anyChecked ? "Delete checked (removes files from disk)" : "Delete selected (removes file from disk)",
+      enabled: anyChecked || hasSelection,
       icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9.5 7V4h5v3"/><path d="M6.5 7l1 13h9l1-13"/></svg>`,
       onClick: () => removeChecked() },
     { label: "Folder", tip: "Open containing folder", enabled: hasSelection,
@@ -271,10 +283,16 @@ function actionOnSelected(kind) {
   target.forEach(id => api()[kind]?.(id));
 }
 function removeChecked() {
-  const ids = Object.keys(state.checked).filter(k => state.checked[k]).map(Number);
+  // Operate on the checked set when there is one; otherwise fall back
+  // to the currently-selected row so hitting Delete after clicking a
+  // row Just Works, matching every other desktop file manager.
+  let ids = Object.keys(state.checked).filter(k => state.checked[k]).map(Number);
+  if (ids.length === 0 && state.sel) ids = [state.sel];
+  if (ids.length === 0) return;
   ids.forEach(id => api().remove(id));
   ids.forEach(id => { const i = state.queue.findIndex(x => x.id === id); if (i >= 0) state.queue.splice(i, 1); });
   state.checked = {};
+  if (ids.includes(state.sel)) state.sel = null;
   renderAll();
 }
 
@@ -431,11 +449,19 @@ function renderDetail() {
   if (!it) return;
   $("detail-file").textContent = it.file;
 
+  // Parse the real YouTube video ID out of the URL rather than using our
+  // internal queue id (which is just 1, 2, 3, ...).
+  const ytIdMatch = (it.url || "").match(/(?:v=|youtu\.be\/|\/shorts\/|\/live\/)([\w-]{6,})/);
+  const ytId = ytIdMatch ? ytIdMatch[1] : "—";
+  // Save folder reflects the actual on-disk location — playlist items live
+  // in a subfolder named after the playlist.
+  const baseFolder = state.settings?.folder || "—";
+  const saveFolder = it.playlist_folder ? `${baseFolder}\\${it.playlist_folder}` : baseFolder;
   const info = [
     ["Title", it.title], ["Channel", it.uploader], ["Duration", it.dur], ["Format", it.quality],
     ["Downloaded", it.got], ["Speed", it.speed], ["Time left", it.eta], ["Status", it.status],
-    ["Added", "today " + it.added], ["Save folder", state.settings?.folder || "—"],
-    ["Source", "youtube.com/watch?v=" + it.id], ["Video ID", String(it.id)],
+    ["Added", "today " + it.added], ["Save folder", saveFolder],
+    ["Source", it.url || "—"], ["Video ID", ytId],
   ];
   const grid = $("info-grid");
   grid.innerHTML = "";
@@ -750,8 +776,12 @@ function menuFor(item) {
     items.push({ name: "Resume", key: "F5",  glyph: "▶", act: () => api().resume(item.id) });
     items.push({ name: "Stop",   key: "",    glyph: "■", act: () => api().stop(item.id) });
   } else if (status === "Queued") {
-    items.push({ name: "Pause", key: "",   glyph: "❙❙", act: () => api().pause(item.id) });
-    items.push({ name: "Stop",  key: "",   glyph: "■",  act: () => api().stop(item.id) });
+    // Primary action mirrors the row's Play button — Resume moves this
+    // item to the front of what the worker pool picks up next. Pause is
+    // still available for power users who want to hold it.
+    items.push({ name: "Resume", key: "",   glyph: "▶", act: () => api().resume(item.id) });
+    items.push({ name: "Pause",  key: "",   glyph: "❙❙", act: () => api().pause(item.id) });
+    items.push({ name: "Stop",   key: "",   glyph: "■",  act: () => api().stop(item.id) });
   } else if (status === "Failed") {
     items.push({ name: "Retry download", key: "Ctrl R", glyph: "↻", act: () => api().retry(item.id) });
   }

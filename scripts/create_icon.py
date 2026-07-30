@@ -5,8 +5,8 @@ Pillow so we can produce a real multi-resolution .ico. The designer
 sheds the topmost plate at sizes 40px and below (icon becomes two
 plates + arrow), so we honour that.
 
-Run with the venv's Python:
-    venv/Scripts/python.exe create_icon.py
+Run from the repo root with the venv's Python:
+    venv/Scripts/python.exe scripts/create_icon.py
 """
 
 from __future__ import annotations
@@ -113,7 +113,9 @@ def render_icon(size: int) -> Image.Image:
 
 
 def main():
-    out = Path(__file__).parent
+    # Output goes into <repo>/assets/. This script lives in <repo>/scripts/.
+    out = Path(__file__).resolve().parent.parent / "assets"
+    out.mkdir(parents=True, exist_ok=True)
 
     # Standard Windows .ico sizes. Explorer uses 16/32/48; taskbar uses
     # 32/48; the shell scales to 128/256 for large-icon views.
