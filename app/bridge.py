@@ -757,9 +757,27 @@ class DownloadManager:
                     it_snap = self._find(id_) or {}
                 is_audio = bool(it_snap.get("audio_only"))
                 bitrate = str(it_snap.get("audio_bitrate") or "192")
-                quality_label = (f"MP3 {bitrate} kbps"
-                                 if is_audio else self._quality_label(info))
-                file_ext = "mp3" if is_audio else (info.get("ext") or "mp4")
+                picked_fmt_id = it_snap.get("format_id")
+
+                # If the user picked a specific format, look up ITS stats
+                # in info['formats'] instead of using yt-dlp's top-level
+                # "best available" fields, which describe a different
+                # format entirely (e.g. label showed 1080p WEBM when the
+                # user picked 720p MP4).
+                picked_stats = self._picked_format_stats(info, picked_fmt_id) if not is_audio else None
+                if is_audio:
+                    quality_label = f"MP3 {bitrate} kbps"
+                    file_ext = "mp3"
+                    total_bytes = 0
+                elif picked_stats:
+                    quality_label = f"{picked_stats['height']}p {picked_stats['ext'].upper()}"
+                    file_ext = picked_stats["ext"]
+                    total_bytes = picked_stats["bytes"] or 0
+                else:
+                    quality_label = self._quality_label(info)
+                    file_ext = info.get("ext") or "mp4"
+                    total_bytes = info.get("filesize") or info.get("filesize_approx") or 0
+
                 self._update(
                     id_,
                     title=info.get("title") or url,
@@ -767,8 +785,8 @@ class DownloadManager:
                     uploader=info.get("uploader") or "—",
                     dur=_fmt_duration(info.get("duration")),
                     quality=quality_label,
-                    size=_fmt_bytes(info.get("filesize") or info.get("filesize_approx")),
-                    mb=int((info.get("filesize") or info.get("filesize_approx") or 0) / 1_048_576),
+                    size=_fmt_bytes(total_bytes) if total_bytes else "—",
+                    mb=int(total_bytes / 1_048_576) if total_bytes else 0,
                     thumbnail=self._pick_thumbnail(info),
                 )
 
@@ -997,6 +1015,38 @@ class DownloadManager:
         h = info.get("height")
         ext = info.get("ext") or "mp4"
         return f"{h}p {ext.upper()}" if h else ext.upper()
+
+    def _picked_format_stats(self, info: Dict[str, Any], format_id: Optional[str]
+                             ) -> Optional[Dict[str, Any]]:
+        """Look up a specific format inside info['formats'] and return its
+        height, ext, and estimated total size. Used so the queue row shows
+        the picked format's numbers (e.g. "720p MP4 · 1.7 GB") instead of
+        yt-dlp's top-level "best available" fields, which describe a
+        different format entirely."""
+        if not format_id or not info:
+            return None
+        formats = info.get("formats") or []
+        # format_id like "136+bestaudio" -- the video part is what has height.
+        video_id = format_id.split("+", 1)[0]
+        video = next((f for f in formats if f.get("format_id") == video_id), None)
+        if not video or not video.get("height"):
+            return None
+        vs = video.get("filesize") or video.get("filesize_approx") or 0
+        needs_mux = video.get("acodec") in (None, "none")
+        total = vs
+        if needs_mux:
+            # Add best-audio size for merged downloads so the size matches
+            # what the user saw in the format dropdown.
+            audios = [a for a in formats
+                      if a.get("vcodec") == "none" and a.get("acodec") not in (None, "none")]
+            best_audio = max(audios, key=lambda a: a.get("abr") or 0, default=None)
+            if best_audio:
+                total += best_audio.get("filesize") or best_audio.get("filesize_approx") or 0
+        return {
+            "height": video["height"],
+            "ext":    (video.get("ext") or "mp4").lower(),
+            "bytes":  total,
+        }
 
     @staticmethod
     def _pick_thumbnail(info: Dict[str, Any]) -> str:

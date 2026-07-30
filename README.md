@@ -59,7 +59,27 @@ to play in VLC / Movies & TV / whatever, or drag into a video editor.
 - **Crash handler** — uncaught errors surface as a real dialog with the
   traceback and a Copy button, instead of dying to stderr
 
-## Install (from source)
+## Install
+
+### For use (recommended)
+
+1. Go to the [Releases page](https://github.com/Oluwatemmy/Youtube-Downloader/releases)
+   and download the latest `YouTManager-*.zip`
+2. Extract it anywhere (e.g. your Downloads folder)
+3. Double-click `install.bat` inside the extracted folder
+4. Windows SmartScreen may show a "Windows protected your PC" dialog — click
+   **More info** → **Run anyway**. This is because the installer isn't
+   code-signed (a solo-developer thing; you can verify the source in this
+   repo). The `.bat` runs the PowerShell install script, which copies the
+   app to `%LOCALAPPDATA%\Programs\YouTManager\` and creates Start Menu +
+   Desktop shortcuts. No admin rights needed.
+
+Uninstall via **Settings → Apps → YouT Manager → Uninstall**, or run
+`uninstall.ps1` from the install folder directly. The uninstaller asks
+whether to also wipe `%APPDATA%\YouTubeDownloader\` (settings / queue /
+history) — defaults to keeping it, so a reinstall picks up where you left off.
+
+### From source (developers)
 
 **Requirements:** Windows 10 or 11, Python 3.10+, ~200 MB free (for the
 bundled FFmpeg download on first run).
@@ -76,10 +96,19 @@ venv\Scripts\python launcher.py
 
 Or double-click `run_youtube_downloader.bat` after the venv is set up.
 
-On first launch:
+To build the packaged version:
 
-1. If FFmpeg isn't on your PATH, the app downloads a static build to
-   `<app>/ffmpeg/bin/` (~100 MB). You'll see a small progress dialog for it.
+```powershell
+scripts\build.ps1 -Version 1.0.0
+```
+
+Produces `dist\YouTManager\YouTManager.exe` and a distributable
+`dist\YouTManager-1.0.0.zip` (installer scripts + app folder, ~22 MB).
+
+### First launch (either path)
+
+1. If FFmpeg isn't already on your PATH, the app downloads a static build
+   to `<app>/ffmpeg/bin/` (~100 MB). One-time.
 2. The **cookies setup wizard** opens. Follow it — takes about a minute and
    is the difference between getting 360p and getting 4K on any video.
 
@@ -175,23 +204,34 @@ FFmpeg (if auto-downloaded) sits in `<app>\ffmpeg\bin\ffmpeg.exe`.
 ## How it's put together
 
 ```
-launcher.py                       Bootstrap: picks the pywebview UI if
-                                  available, otherwise falls back to Tkinter
-youtube_downloader_pywebview.py   Main entry — window + PyBridge
-pywebview_bridge.py               Python side: DownloadManager, PyBridge
-                                  JS API, persistence, ffmpeg auto-install,
-                                  cookies fallback chain
-ui/index.html                     Single-page frontend (the "YouT Manager"
-                                  design)
-ui/styles.css                     Design tokens + component styles
-ui/app.js                         State, rendering, dialogs, playlist
-                                  picker, crash modal
-yt_dlp_enhanced.py                Legacy async backend — only used by the
-                                  Tkinter fallback UI
-youtube_downloader_gui.py         Legacy Tkinter UI — fallback when
-                                  pywebview / WebView2 unavailable
-create_icon.py                    Renders the app icon from the design
-YouTube app design system/        Reference design mockups (gitignored)
+launcher.py                 Bootstrap: picks the pywebview UI if
+                            available, otherwise falls back to Tkinter
+install.bat                 User-facing installer entry (calls the PS
+                            script with -ExecutionPolicy Bypass)
+
+app/                        Runtime Python
+  main.py                     pywebview entry, ffmpeg auto-install
+  bridge.py                   DownloadManager, PyBridge JS API,
+                              persistence, cookies fallback chain
+  legacy_gui.py               Tkinter fallback UI
+  legacy_backend.py           Async yt-dlp wrapper for legacy_gui
+
+ui/                         Single-page frontend (the "YouT Manager" design)
+  index.html                  Markup
+  styles.css                  Design tokens + component styles
+  app.js                      State, rendering, dialogs, playlist picker,
+                              crash modal, clipboard prompt
+
+assets/                     App icon (multi-resolution .ico + png/icns)
+scripts/                    Dev + build tooling
+  create_icon.py              Renders the icon from the design
+  build.ps1                   Reproducible build (venv + PyInstaller + zip)
+  install.ps1                 Copies to %LOCALAPPDATA%, creates shortcuts,
+                              registers uninstaller in Settings > Apps
+  uninstall.ps1               Reverse of install; asks about user data
+packaging/
+  youtube_downloader.spec     PyInstaller spec (one-folder, --windowed)
+docs/                       Screenshot + release-facing docs
 ```
 
 Downloads are managed by `DownloadManager` (a thread-pool wrapping yt-dlp
@@ -203,11 +243,12 @@ progress and log events push the other way via
 
 Rough order of what's next:
 
-- Windows installer (PyInstaller + Start Menu shortcut + uninstaller)
 - Drag-and-drop URLs from the browser
 - Subtitle download option in the Add URL dialog
 - Windows toast notification when a batch completes
 - Speed limit per download
+- Minimize to tray for long-running queues
+- Code-signed installer (removes the SmartScreen warning)
 - Minimize to tray for long-running queues
 
 ## Credits

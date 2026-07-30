@@ -115,7 +115,8 @@ def check_required_files():
     """Check if required files exist"""
     current_dir = Path(__file__).parent
     required_files = [
-        "yt_dlp_enhanced.py"
+        "app/main.py",
+        "app/bridge.py",
     ]
 
     missing_files = []
@@ -150,11 +151,11 @@ def launch_application():
 
         try:
             import webview  # noqa: F401 — probe the pywebview install
-            from youtube_downloader_pywebview import main
+            from app.main import main
             print("[info] using pywebview UI")
         except ImportError as exc:
             print(f"[warn] pywebview unavailable ({exc}); falling back to Tkinter UI")
-            from youtube_downloader_gui import main
+            from app.legacy_gui import main
 
         main()
 

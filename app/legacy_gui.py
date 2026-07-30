@@ -29,14 +29,13 @@ except ImportError:
     pass
 
 # Import our enhanced downloader
-sys.path.insert(0, str(Path(__file__).parent))
 try:
-    from yt_dlp_enhanced import OptimizedYoutubeDownloader
+    from app.legacy_backend import OptimizedYoutubeDownloader
     import yt_dlp
 except ImportError as e:
     error_msg = "Required dependencies not found. Please install:\n\n"
     error_msg += "pip install yt-dlp aiohttp aiofiles tqdm\n\n"
-    error_msg += "And ensure yt_dlp_enhanced.py is in the same directory."
+    error_msg += "And make sure you're running from the repo root."
 
     # Show error in GUI if possible, otherwise print
     try:
@@ -83,7 +82,7 @@ class YouTubeDownloaderGUI:
 
         # Set icon (if available)
         try:
-            self.root.iconbitmap("icon.ico")
+            self.root.iconbitmap(str(Path(__file__).resolve().parent.parent / "assets" / "icon.ico"))
         except Exception:
             pass
 
@@ -2226,7 +2225,7 @@ def main():
     # Set window icon if available
     try:
         # Try to set a modern icon
-        root.iconbitmap("icon.ico")
+        root.iconbitmap(str(Path(__file__).resolve().parent.parent / "assets" / "icon.ico"))
     except Exception:
         pass
 
