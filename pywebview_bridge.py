@@ -94,6 +94,16 @@ def _fmt_speed(bps: Optional[float]) -> str:
     return f"{_fmt_bytes(bps)}/s".replace(" ", " ")
 
 
+_FOLDER_INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+def _sanitize_folder_name(name: str) -> str:
+    """Return a Windows-safe folder name. Replaces illegal characters,
+    strips trailing dots/spaces (which Windows drops silently), and caps
+    length so path-limit issues stay unlikely for the files inside."""
+    cleaned = _FOLDER_INVALID.sub("-", name or "").strip(". ")[:150]
+    return cleaned or "Playlist"
+
+
 def _fmt_eta(seconds: Optional[float]) -> str:
     if not seconds or seconds <= 0:
         return "—"
@@ -126,6 +136,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "cookies_file": "",           # path to a cookies.txt exported from a browser
     "wizard_seen": False,         # first-run cookies wizard has been shown
     "mp3_bitrate": "192",         # default kbps for MP3 extraction (320/256/192/128/96)
+    "ytdlp_last_check": "",       # ISO timestamp of last update check (auto-runs weekly)
 }
 
 DEFAULT_ANALYTICS: Dict[str, Any] = {
@@ -162,6 +173,29 @@ def _save_json(path: Path, data: Dict[str, Any]) -> None:
 # download manager
 # ---------------------------------------------------------------
 
+class _ItemLogger:
+    """yt-dlp expects a logger with debug/info/warning/error methods.
+    We route each call into the DownloadManager's per-item log buffer,
+    with a css tone matching the severity."""
+    def __init__(self, mgr: "DownloadManager", id_: int):
+        self.mgr = mgr
+        self.id = id_
+
+    def debug(self, msg: str) -> None:
+        # yt-dlp prefixes real debug lines with "[debug]" — those are
+        # noisy internals we don't want in the UI. Everything else at
+        # debug level is actually an info-style message (like the
+        # "[youtube] extracting ..." lines).
+        s = str(msg)
+        if s.startswith("[debug]"):
+            return
+        self.mgr._log(self.id, "tx2", s)
+
+    def info(self, msg):    self.mgr._log(self.id, "tx",   str(msg))
+    def warning(self, msg): self.mgr._log(self.id, "warn", str(msg))
+    def error(self, msg):   self.mgr._log(self.id, "bad",  str(msg))
+
+
 class DownloadManager:
     """Owns the download queue and worker threads.
 
@@ -185,6 +219,10 @@ class DownloadManager:
         self._futures: Dict[int, Future] = {}
         self._cancelled: set[int] = set()  # ids the user asked to stop
         self._last_emit: Dict[int, float] = {}  # id -> last emit ts, for throttling
+        # Per-item captured log lines from yt-dlp. Kept in memory only —
+        # logs are ephemeral per session, not part of queue persistence.
+        # Each entry is [text, tone] where tone is a css class name.
+        self._logs: Dict[int, List[List[str]]] = {}
 
         # Restore any queue that was persisted from the previous session.
         # Anything that had been Downloading gets flipped to Paused since
@@ -198,7 +236,8 @@ class DownloadManager:
             return [dict(i) for i in self._items]
 
     def add(self, url: str, format_id: Optional[str] = None,
-            audio: bool = False, bitrate: str = "192") -> int:
+            audio: bool = False, bitrate: str = "192",
+            playlist_folder: str = "") -> int:
         url = url.strip()
         if not url:
             raise ValueError("empty url")
@@ -211,16 +250,22 @@ class DownloadManager:
             item["format_id"] = None if audio else format_id
             item["audio_only"] = bool(audio)
             item["audio_bitrate"] = str(bitrate or "192")
+            # When set, the download goes into <folder>/<playlist_folder>/
+            # so playlist items don't scatter across the root download dir.
+            item["playlist_folder"] = _sanitize_folder_name(playlist_folder) if playlist_folder else ""
             self._items.append(item)
         self._emit_queue()
         self._persist()
+        self._log(item["id"], "tx3", "[queue] added — waiting for a worker slot")
         # Kick off metadata + download in one background task
         self._futures[item["id"]] = self._pool.submit(self._run, item["id"])
         return item["id"]
 
     def add_batch(self, urls: List[str], format_id: Optional[str] = None,
-                  audio: bool = False, bitrate: str = "192") -> List[int]:
-        return [self.add(u, format_id=format_id, audio=audio, bitrate=bitrate)
+                  audio: bool = False, bitrate: str = "192",
+                  playlist_folder: str = "") -> List[int]:
+        return [self.add(u, format_id=format_id, audio=audio, bitrate=bitrate,
+                         playlist_folder=playlist_folder)
                 for u in urls if u.strip()]
 
     def remove(self, id_: int) -> None:
@@ -249,7 +294,9 @@ class DownloadManager:
             # Delete any partials from an incomplete / interrupted download.
             title = (captured.get("title") or "").strip()
             if title:
-                download_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+                base_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+                sub = captured.get("playlist_folder") or ""
+                download_dir = base_dir / sub if sub else base_dir
                 stem = title.replace(":", "-").replace("/", "-").replace("?", "")[:120]
                 for pattern in (f"{stem}*.part*", f"{stem}*.ytdl", f"{stem}.*"):
                     for p in download_dir.glob(pattern):
@@ -399,7 +446,10 @@ class DownloadManager:
         title = (item.get("title") or "").strip()
         if not title:
             return None
-        download_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+        base_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+        # Playlist items live in a subfolder — search there first.
+        sub = item.get("playlist_folder") or ""
+        download_dir = base_dir / sub if sub else base_dir
         if not download_dir.exists():
             return None
         # yt-dlp sanitizes some chars in the output template; mirror that.
@@ -420,6 +470,23 @@ class DownloadManager:
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
+
+    # ---- per-item log ----
+
+    def _log(self, id_: int, tone: str, text: str) -> None:
+        """Append one log line for an item and push an event to the UI.
+        Tone is one of: tx (default), tx2, tx3, acc, ok, bad, warn."""
+        text = str(text).rstrip()
+        if not text:
+            return
+        buf = self._logs.setdefault(id_, [])
+        buf.append([text, tone])
+        if len(buf) > 300:  # cap so a chatty download doesn't grow unbounded
+            del buf[:len(buf) - 300]
+        self._on_event({"type": "log", "id": id_, "line": [text, tone]})
+
+    def get_log(self, id_: int) -> List[List[str]]:
+        return list(self._logs.get(id_, []))
 
     # ---- persistence ----
 
@@ -476,6 +543,7 @@ class DownloadManager:
             "got": "0 B", "error": None, "output_path": None,
             "thumbnail": "",
             "audio_only": False, "audio_bitrate": "192",
+            "playlist_folder": "",
         }
 
     def _update(self, id_: int, **fields) -> None:
@@ -644,6 +712,7 @@ class DownloadManager:
                     return
                 url = it["url"]
             self._update(id_, status="Downloading", speed="—", eta="—")
+            self._log(id_, "tx3", f"[info] starting download for {url}")
 
             # --- fetch metadata (best-effort) ---
             # Track which (client, use_cookies) combo actually worked so
@@ -703,7 +772,12 @@ class DownloadManager:
                 return
 
             # --- download ---
-            download_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+            base_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+            with self._lock:
+                subfolder = (self._find(id_) or {}).get("playlist_folder") or ""
+            # Playlist items get their own subfolder so they don't scatter
+            # across the root download folder alongside standalone videos.
+            download_dir = base_dir / subfolder if subfolder else base_dir
             download_dir.mkdir(parents=True, exist_ok=True)
             outtmpl = str(download_dir / "%(title)s.%(ext)s")
 
@@ -777,6 +851,11 @@ class DownloadManager:
                 "outtmpl": outtmpl,
                 "progress_hooks": [hook],
                 "postprocessor_hooks": [pp_hook],
+                # Route yt-dlp's own messages into the per-item log so the
+                # Log tab shows what's actually happening for THIS video
+                # (previously it showed a hardcoded fake trace).
+                "logger": _ItemLogger(self, id_),
+                "quiet": False, "no_warnings": False,
                 "writesubtitles": bool(self._settings.get("desc")),
                 "continuedl": not fresh,
                 "overwrites": fresh,
@@ -789,7 +868,10 @@ class DownloadManager:
                     "preferredquality": bitrate,
                 }]
             else:
-                extra_opts["format"] = item_format if item_format else self._format_selector()
+                # Map "1440p"/"1080p"/etc. shortcuts to real yt-dlp format
+                # expressions; pass raw format IDs (like "137+bestaudio")
+                # straight through.
+                extra_opts["format"] = self._resolve_format(item_format)
 
             # Reuse the same (player_client, use_cookies) combo that
             # succeeded during metadata extraction — otherwise the download
@@ -804,34 +886,56 @@ class DownloadManager:
                 ydl.download([url])
 
             self._update(id_, status="Done", pct=100, speed="—", eta="—", error=None)
+            self._log(id_, "ok", "[done] download complete")
 
         except KeyboardInterrupt:
             # User-initiated pause / stop — clean exit, free the worker.
             self._update(id_, status="Paused", speed="—", eta="—")
+            self._log(id_, "warn", "[paused] cancelled by user")
         except yt_dlp.DownloadError as exc:
             if id_ in self._cancelled:
                 self._update(id_, status="Paused", speed="—", eta="—")
+                self._log(id_, "warn", "[paused] cancelled by user")
             else:
                 self._update(id_, status="Failed", speed="—", eta="—",
                              error=str(exc)[:400])
+                self._log(id_, "bad", f"[error] {exc}")
         except Exception as exc:
             self._update(id_, status="Failed", speed="—", eta="—",
                          error=f"{type(exc).__name__}: {exc}"[:400])
+            self._log(id_, "bad", f"[error] {type(exc).__name__}: {exc}")
             traceback.print_exc()
+
+    # App-level quality shortcuts → yt-dlp format expressions. Each entry
+    # ends in "…/bestvideo+bestaudio/best" so if no stream meets the ceiling
+    # (e.g. user asks for 1440p on a 720p-only video), we fall through to
+    # whatever the video does have instead of failing with "format not
+    # available". Order matters: try the exact ceiling first, then merged
+    # fallback, then any combined.
+    _QUALITY_MAP: Dict[str, str] = {
+        "best":  "bestvideo+bestaudio/best",
+        "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]/bestvideo+bestaudio/best",
+        "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]/bestvideo+bestaudio/best",
+        "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+        "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best",
+        "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best",
+        "360p":  "bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo+bestaudio/best",
+        "audio": "bestaudio/best",
+    }
 
     def _format_selector(self) -> str:
         q = self._settings.get("quality", "1080p")
-        m = {
-            "best": "bestvideo+bestaudio/best",
-            "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]",
-            "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]",
-            "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-            "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]",
-            "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]",
-            "360p":  "bestvideo[height<=360]+bestaudio/best[height<=360]",
-            "audio": "bestaudio/best",
-        }
-        return m.get(q, m["1080p"])
+        return self._QUALITY_MAP.get(q, self._QUALITY_MAP["1080p"])
+
+    def _resolve_format(self, format_id: Optional[str]) -> str:
+        """Translate whatever the UI sent us into a real yt-dlp format
+        expression. Handles both quality shortcuts ("1440p") and
+        already-resolved format IDs ("137+bestaudio")."""
+        if not format_id:
+            return self._format_selector()
+        if format_id in self._QUALITY_MAP:
+            return self._QUALITY_MAP[format_id]
+        return format_id  # Trust it's a real yt-dlp format spec.
 
     def _quality_label(self, info: Dict[str, Any]) -> str:
         h = info.get("height")
@@ -870,6 +974,38 @@ class PyBridge:
         self._settings = _load_json(SETTINGS_FILE, DEFAULT_SETTINGS)
         self._history: List[Dict[str, Any]] = self._load_history()
         self._mgr = DownloadManager(self._settings, self._push_event, self._record_finished)
+
+    def install_crash_handler(self) -> None:
+        """Route uncaught exceptions on the main thread and worker
+        threads to a JS-side error modal so the user actually sees
+        them instead of silently losing state to stderr."""
+        def report(exc_type, exc_value, exc_tb):
+            tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            # Always log to stderr so it's captured even if JS side fails.
+            sys.stderr.write(tb_text)
+            sys.stderr.flush()
+            self._push_event({
+                "type": "crash",
+                "name": getattr(exc_type, "__name__", "Error"),
+                "message": str(exc_value)[:500],
+                "traceback": tb_text[-4000:],  # cap so evaluate_js payload stays small
+            })
+
+        prev_hook = sys.excepthook
+        def sys_hook(exc_type, exc_value, exc_tb):
+            try:
+                report(exc_type, exc_value, exc_tb)
+            finally:
+                prev_hook(exc_type, exc_value, exc_tb)
+        sys.excepthook = sys_hook
+
+        # Python 3.8+: also catch uncaught exceptions on worker threads.
+        try:
+            def thread_hook(args):
+                report(args.exc_type, args.exc_value, args.exc_traceback)
+            threading.excepthook = thread_hook
+        except AttributeError:
+            pass
 
     def _load_history(self) -> List[Dict[str, Any]]:
         if not HISTORY_FILE.exists():
@@ -938,6 +1074,7 @@ class PyBridge:
             format_id=options.get("format_id"),
             audio=bool(options.get("audio")),
             bitrate=options.get("bitrate") or self._settings.get("mp3_bitrate", "192"),
+            playlist_folder=options.get("playlist_folder") or "",
         )
         return {"id": id_}
 
@@ -948,7 +1085,63 @@ class PyBridge:
             format_id=options.get("format_id"),
             audio=bool(options.get("audio")),
             bitrate=options.get("bitrate") or self._settings.get("mp3_bitrate", "192"),
+            playlist_folder=options.get("playlist_folder") or "",
         )}
+
+    def get_playlist_entries(self, url: str) -> Dict[str, Any]:
+        """List the videos in a playlist without downloading anything.
+
+        Uses `extract_flat="in_playlist"` so each entry only gets the
+        cheap fields (id, title, duration, uploader, thumbnails) —
+        important because a large playlist can otherwise take minutes
+        to enumerate. Returns entries the UI can render as a checklist.
+        """
+        url = url.strip()
+        if not url:
+            return {"error": "empty url"}
+        try:
+            with yt_dlp.YoutubeDL({
+                **self._mgr._ydl_opts(),
+                "extract_flat": "in_playlist",
+            }) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as exc:
+            return {"error": str(exc)[:400]}
+        if not info:
+            return {"error": "no data from yt-dlp"}
+        raw_entries = info.get("entries") or []
+        entries: List[Dict[str, Any]] = []
+        total_secs = 0
+        for e in raw_entries:
+            if not e:
+                continue
+            vid_id = e.get("id") or ""
+            vid_url = (e.get("url") or e.get("webpage_url")
+                       or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else ""))
+            if not vid_url:
+                continue
+            dur = e.get("duration")
+            if dur:
+                total_secs += int(dur)
+            thumbs = e.get("thumbnails") or []
+            thumb = ""
+            if thumbs:
+                # Pick a small one — playlist checklist is a compact view.
+                small = [t for t in thumbs if t.get("url") and (t.get("width") or 0) <= 320]
+                thumb = (small[-1] if small else thumbs[-1]).get("url", "")
+            entries.append({
+                "url": vid_url,
+                "title": e.get("title") or "?",
+                "dur": _fmt_duration(dur),
+                "uploader": e.get("uploader") or "",
+                "thumbnail": thumb,
+            })
+        return {
+            "title": info.get("title") or "Playlist",
+            "count": len(entries),
+            "total_duration": _fmt_duration(total_secs) if total_secs else "—",
+            "entries": entries,
+        }
 
     def get_formats(self, url: str) -> Dict[str, Any]:
         """Return the list of formats yt-dlp actually finds for `url`, with
@@ -1084,6 +1277,9 @@ class PyBridge:
 
     def open_file(self, id_: int) -> bool:
         return self._mgr.open_file(int(id_))
+
+    def get_log(self, id_: int) -> List[List[str]]:
+        return self._mgr.get_log(int(id_))
 
     # --- settings ---
 
@@ -1249,6 +1445,55 @@ class PyBridge:
             return yt_dlp.version.__version__
         except Exception:
             return "?"
+
+    def ytdlp_check_update(self) -> Dict[str, Any]:
+        """Query PyPI for the latest yt-dlp release. Only checks — doesn't
+        download anything. Returns current + latest + a boolean flag."""
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://pypi.org/pypi/yt-dlp/json",
+                headers={"User-Agent": "YouTubeDownloaderPro/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+        except Exception as exc:
+            return {"error": str(exc)[:200]}
+        latest = (data.get("info") or {}).get("version") or ""
+        current = self.ytdlp_version()
+        return {
+            "current": current,
+            "latest": latest,
+            "update_available": self._version_is_newer(latest, current),
+        }
+
+    def ytdlp_update(self) -> Dict[str, Any]:
+        """Actually run `pip install -U yt-dlp` in the current Python.
+        Requires an app restart to load the new module — the caller
+        should tell the user so."""
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
+                capture_output=True, text=True, timeout=180,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if result.returncode != 0:
+                return {"ok": False, "error": (result.stderr or result.stdout)[-400:]}
+            self._settings["ytdlp_last_check"] = datetime.now().isoformat()
+            _save_json(SETTINGS_FILE, self._settings)
+            return {"ok": True, "restart_needed": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:200]}
+
+    @staticmethod
+    def _version_is_newer(latest: str, current: str) -> bool:
+        """Compare CalVer-style yt-dlp versions ("2026.07.14")."""
+        try:
+            l = tuple(int(p) for p in re.split(r"[.\-]", latest) if p.isdigit())
+            c = tuple(int(p) for p in re.split(r"[.\-]", current) if p.isdigit())
+            return bool(l and c and l > c)
+        except Exception:
+            return False
 
     _YT_URL_RE = re.compile(
         r"https?://(?:www\.|m\.|music\.)?(?:youtube\.com/(?:watch\?[^\s]*v=|playlist\?[^\s]*list=|shorts/|live/)|youtu\.be/)[\w\-?=&/]+",

@@ -142,6 +142,9 @@ def main() -> None:
     from pywebview_bridge import PyBridge
 
     api = PyBridge()
+    # Route uncaught Python exceptions into a JS-side crash modal so the
+    # user actually sees them instead of losing state to stderr.
+    api.install_crash_handler()
 
     # The UI folder ships alongside this script in dev and inside the
     # PyInstaller bundle in production. sys._MEIPASS points at the

@@ -382,7 +382,10 @@ body.density-compact .tbl-row { height: 38px; }
   background: var(--layer3); border: 1px solid var(--stroke2);
   box-shadow: 0 16px 36px rgba(0,0,0,.5);
   z-index: 30; pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
 }
+.tbl-row:hover .err-tooltip { opacity: 1; }
 .err-tooltip .h { font-size: 11px; font-weight: 700; color: var(--bad); margin-bottom: 4px; }
 .err-tooltip .b { font-size: 11.5px; line-height: 1.5; color: var(--tx2); }
 
@@ -835,6 +838,45 @@ body.density-compact .tbl-row { height: 38px; }
 }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
+.playlist-card {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--acc) 8%, var(--layer));
+  border: 1px solid color-mix(in srgb, var(--acc) 30%, var(--stroke));
+}
+.playlist-head { display: flex; align-items: center; gap: 12px; }
+.playlist-title { font-size: 13px; font-weight: 620; color: var(--tx); }
+.playlist-meta  { font-size: 11.5px; color: var(--tx2); margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+.picker-list {
+  flex: 1; overflow-y: auto;
+  padding: 4px 8px;
+}
+.picker-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease-out;
+}
+.picker-row:hover { background: var(--layer2); }
+.picker-thumb {
+  width: 56px; height: 32px; flex: none;
+  border-radius: 3px; overflow: hidden;
+  background: repeating-linear-gradient(135deg, var(--layer2) 0 5px, var(--layer3) 5px 10px);
+}
+.picker-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.picker-info { flex: 1; min-width: 0; }
+.picker-title {
+  font-size: 12.5px; color: var(--tx);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.picker-meta {
+  font-size: 11px; color: var(--tx3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.picker-dur { font: 400 11px/1 var(--mono); color: var(--tx3); flex: none; }
+
 .mode-toggle {
   display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
   padding: 3px; border-radius: 8px;
@@ -876,6 +918,14 @@ body.density-compact .tbl-row { height: 38px; }
 .btn-inbetween:hover { filter: brightness(1.15); }
 
 /* ----- context menu ----------------------------------------------- */
+
+/* Invisible full-screen catcher — dismisses the context menu on any
+   click, even if the underlying element stops propagation. */
+.ctx-scrim {
+  position: fixed; inset: 0; z-index: 69;
+  background: transparent;
+}
+.ctx-scrim.hidden { display: none; }
 
 .ctx-menu {
   position: fixed; z-index: 70;

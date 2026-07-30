@@ -229,6 +229,21 @@
 
       <!-- Stage 2: revealed once formats are known / URLs are entered -->
       <div id="stage2" hidden>
+        <!-- Playlist card — shown when the pasted URL is a playlist. Replaces
+             the quality dropdown since per-video formats vary and would be
+             misleading if picked at the playlist level. -->
+        <div id="playlist-card" class="playlist-card" hidden>
+          <div class="playlist-head">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--acc);flex:none">
+              <path d="M4 6h13"/><path d="M4 12h13"/><path d="M4 18h9"/><path d="M17 15l4 3-4 3z" fill="currentColor" stroke="none"/>
+            </svg>
+            <div style="flex:1;min-width:0">
+              <div class="playlist-title" id="playlist-title">Playlist</div>
+              <div class="playlist-meta" id="playlist-meta">— videos</div>
+            </div>
+            <button class="btn-plain" id="playlist-choose" style="height:30px">Choose videos…</button>
+          </div>
+        </div>
         <div class="field" style="margin-bottom: 12px">
           <span class="field-label">Download as</span>
           <div class="mode-toggle" role="tablist">
@@ -264,7 +279,39 @@
 </div>
 
 <!-- ============ context menu ============ -->
+<div class="ctx-scrim hidden" id="ctx-scrim"></div>
 <div class="ctx-menu hidden" id="ctx-menu"></div>
+
+<!-- ============ crash modal (uncaught Python / JS errors) ============ -->
+<div class="modal-backdrop hidden" id="crash-modal">
+  <div class="modal" style="width:640px;max-width:92vw" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:26px;height:26px;border-radius:6px;background:var(--badS);display:flex;align-items:center;justify-content:center">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" style="color:var(--bad)">
+            <circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><path d="M12 16.5v.5"/>
+          </svg>
+        </div>
+        <span class="t">Something went wrong</span>
+      </div>
+      <div class="title-spacer"></div>
+      <button class="modal-close" id="crash-close" title="Dismiss">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div id="crash-name" style="font-size:13px;font-weight:620;color:var(--bad);margin-bottom:4px">Error</div>
+      <div id="crash-message" style="font-size:12.5px;color:var(--tx2);margin-bottom:12px;word-break:break-word"></div>
+      <pre id="crash-traceback" style="max-height:280px;overflow:auto;padding:10px 12px;border-radius:7px;background:var(--layer2);border:1px solid var(--stroke);font:400 11px/1.5 var(--mono);color:var(--tx2);white-space:pre-wrap;word-break:break-word"></pre>
+    </div>
+    <div class="modal-foot">
+      <span class="hint" style="font-size:11.5px;color:var(--tx3)">The app is still running — you can dismiss and keep working.</span>
+      <div class="title-spacer"></div>
+      <button class="btn-quiet" id="crash-copy">Copy details</button>
+      <button class="btn-accent" id="crash-dismiss">Dismiss</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============ clipboard-url prompt (centered modal) ============ -->
 <div class="modal-backdrop hidden" id="clip-modal">
@@ -295,6 +342,32 @@
       <div class="title-spacer"></div>
       <button class="btn-quiet" id="clip-modal-skip">Not now</button>
       <button class="btn-accent" id="clip-modal-add">Add to queue</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ playlist video picker ============ -->
+<div class="modal-backdrop hidden" id="picker-modal">
+  <div class="modal" style="width:640px;max-width:92vw;display:flex;flex-direction:column;max-height:80vh" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <span class="t">Choose videos</span>
+      <span style="font-size:11.5px;color:var(--tx3);margin-left:8px" id="picker-count">0 of 0</span>
+      <div class="title-spacer"></div>
+      <button class="modal-close" id="picker-close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 16px;border-bottom:1px solid var(--stroke)">
+      <button class="set-btn" id="picker-all" style="height:26px;font-size:11.5px">Select all</button>
+      <button class="set-btn" id="picker-none" style="height:26px;font-size:11.5px">Clear</button>
+      <div class="title-spacer"></div>
+      <input id="picker-search" placeholder="Filter…" class="set-input" style="height:26px;width:180px;font-size:11.5px"/>
+    </div>
+    <div class="picker-list" id="picker-list"></div>
+    <div class="modal-foot">
+      <div class="title-spacer"></div>
+      <button class="btn-quiet" id="picker-cancel">Cancel</button>
+      <button class="btn-accent" id="picker-done">Done</button>
     </div>
   </div>
 </div>
