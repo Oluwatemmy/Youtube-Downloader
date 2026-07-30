@@ -155,7 +155,13 @@ def main() -> None:
         print(f"[fatal] ui/index.html not found at {ui_index}", file=sys.stderr)
         sys.exit(1)
 
-    window = webview.create_window(
+    # Try to set the window icon on Windows so the taskbar entry shows
+    # our brand instead of the Python launcher's snake. pywebview passes
+    # this through to the OS window; when packaged with PyInstaller's
+    # --icon= flag the .exe icon also takes over.
+    icon_path = base / "icon.ico"
+
+    create_window_kwargs = dict(
         title="YouT Manager",
         url=str(ui_index),
         js_api=api,
@@ -170,6 +176,16 @@ def main() -> None:
         # a bespoke title bar.
         frameless=False,
     )
+    if icon_path.exists():
+        # pywebview 6+ accepts an `icon` kwarg on backends that support it.
+        # Older builds raise TypeError — fall through and rely on the
+        # PyInstaller .exe icon instead.
+        try:
+            window = webview.create_window(**create_window_kwargs, icon=str(icon_path))
+        except TypeError:
+            window = webview.create_window(**create_window_kwargs)
+    else:
+        window = webview.create_window(**create_window_kwargs)
     api.attach(window)
 
     webview.start(debug=False)
