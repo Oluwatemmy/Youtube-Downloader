@@ -398,14 +398,14 @@ Fork → branch → commit → PR. No CLA, no lawyers, just be nice.
 
 ### Ideas for contributors
 
-Small pickings (~half day each):
+Small pickings:
 - Subtitle language picker: remember the last-used language as the default
 - Playlist picker: bulk-invert selection (currently only "Select all" /
   "Clear")
 - Analytics: bar chart of downloads per hour-of-day
 - Right-click "Copy shareable URL" that omits the noisy tracking params
 
-Bigger ones (weekend project):
+Bigger ones:
 - Any item from the Roadmap above
 - macOS / Linux support (currently Windows-only for the packaged install;
   the app itself runs on any pywebview-supported platform)
@@ -416,6 +416,8 @@ Bigger ones (weekend project):
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) — does the actual heavy lifting
 - [pywebview](https://pywebview.flowrl.com/) — Python + native WebView2
+- [Ajayi Oluwaseyi Temitope](https://github.com/Oluwatemmy) — author,
+  design, and the whole application layer
 - [QuickJS-NG](https://github.com/quickjs-ng/quickjs) — bundled JavaScript
   runtime used to decrypt YouTube's `nsig` signature
 - [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) — static
@@ -425,8 +427,6 @@ Bigger ones (weekend project):
   every request
 - [winotify](https://pypi.org/project/winotify/) — Windows toast
   notifications for finished downloads
-- [Ajayi Oluwaseyi Temitope](https://github.com/Oluwatemmy) — author,
-  design, and the whole application layer
 - [@reissbruno](https://github.com/reissbruno) — proposed MP3 extraction in
   [PR #5](https://github.com/Oluwatemmy/Youtube-Downloader/pull/5); the
   current dialog toggle borrows the "format as top-level choice" idea
