@@ -219,7 +219,17 @@ function renderCats() {
       <span class="cat-dot" style="background: ${CAT_DOTS[k]}"></span>
       <span class="cat-label">${labels[k]}</span>
       <span class="cat-count">${c[k] || 0}</span>`;
-    btn.addEventListener("click", () => { state.cat = k; renderAll(); });
+    btn.addEventListener("click", () => {
+      state.cat = k;
+      // Jump back to the Downloads view when a category is clicked from
+      // Settings or Analytics — otherwise the filter silently applies to
+      // a queue the user can't see and looks broken.
+      if (state.view !== "downloads") {
+        state.view = "downloads";
+        renderView();
+      }
+      renderAll();
+    });
     host.appendChild(btn);
   });
 }
@@ -899,9 +909,10 @@ function openDialog() {
   state.formats = null; state.formatId = "best"; state.formatsLoading = false;
   state.formatsError = null; state.formatsUrl = null; state.formatsNote = null;
   state.videoInfo = null;
+  state.subtitles = [];
   state.playlist = null; state.playlistLoading = false;
   state.playlistError = null; state.playlistPicked = null;
-  const subs = $("dlg-subs"); if (subs) subs.checked = false;
+  const subs = $("dlg-subs"); if (subs) subs.value = "";
   // Reset to Video mode each open. Bitrate keeps the last saved default.
   state.dlgMode = "video";
   state.audioBitrate = state.settings?.mp3_bitrate || "192";
@@ -949,11 +960,9 @@ function updateStage2Visibility() {
   $("stage2").hidden = !show;
   if (show) renderFormatOptions();
   renderPlaylistCard();
-  // Subtitles only apply to video downloads — hide the row in audio mode
-  // (yt-dlp's audio-only pipeline still writes .vtt if asked, but it's
-  // just noise for someone who wants an MP3 file).
-  const subsField = $("subs-field");
-  if (subsField) subsField.hidden = state.dlgMode === "audio";
+  // Subtitles only apply to video downloads — the render function also
+  // handles the audio-mode hide, so call it here to sync on mode toggle.
+  renderSubtitlesDropdown();
 }
 function updateSubmitButtons() {
   const canGo = stage2Ready()
@@ -1039,6 +1048,27 @@ function updateDialogHint() {
     return;
   }
   $("dlg-hint").textContent = "Paste a URL to get started";
+}
+
+function renderSubtitlesDropdown() {
+  const sel = $("dlg-subs");
+  const field = $("subs-field");
+  if (!sel || !field) return;
+  const subs = state.subtitles || [];
+  // Hide the whole row when: audio mode (no video to embed into) OR the
+  // video has no subtitles at all. No need to show an empty dropdown.
+  const hide = state.dlgMode === "audio" || subs.length === 0;
+  field.hidden = hide;
+  if (hide) {
+    sel.value = "";
+    return;
+  }
+  sel.innerHTML = "";
+  sel.appendChild(el("option", { text: "None", attrs: { value: "" } }));
+  subs.forEach(s => {
+    sel.appendChild(el("option", { text: s.label, attrs: { value: s.code } }));
+  });
+  sel.disabled = false;
 }
 
 function renderVideoInfo() {
@@ -1157,9 +1187,10 @@ function scheduleFormatFetch(url) {
   if (!url || !/youtu\.?be/i.test(url)) {
     state.formats = null; state.formatsLoading = false; state.formatsError = null;
     state.formatsNote = null; state.videoInfo = null;
+    state.subtitles = [];
     state.playlist = null; state.playlistLoading = false;
     state.playlistError = null; state.playlistPicked = null;
-    renderVideoInfo();
+    renderVideoInfo(); renderSubtitlesDropdown();
     updateStage2Visibility(); updateFetchStatus(); updateDialogHint(); updateSubmitButtons();
     return;
   }
@@ -1171,6 +1202,10 @@ function scheduleFormatFetch(url) {
 function scheduleVideoFormatFetch(url) {
   state.playlist = null; state.playlistPicked = null;
   state.formatsLoading = true; state.formatsError = null;
+  // Reset the Download button label — otherwise the stale "Download 104
+  // videos" from the previous playlist stays visible while the single URL
+  // metadata is fetching.
+  updateDownloadLabel();
   updateFetchStatus(); updateDialogHint(); updateSubmitButtons();
   const mySeq = ++_formatFetchSeq;
   _formatFetchTimer = setTimeout(async () => {
@@ -1193,8 +1228,10 @@ function scheduleVideoFormatFetch(url) {
           thumbnail: res.thumbnail,
           views:     res.views,
         };
+        state.subtitles = res.playlist ? [] : (res.subtitles || []);
       }
       renderVideoInfo();
+      renderSubtitlesDropdown();
     } catch (exc) {
       if (mySeq !== _formatFetchSeq) return;
       state.formatsError = "Couldn't fetch formats: " + exc.message;
@@ -1217,7 +1254,18 @@ function schedulePlaylistFetch(url) {
   // generic ladder (per-video sizes vary and can't be fetched cheaply).
   state.formats = null; state.formatsNote = null; state.formatsError = null;
   state.playlist = null; state.playlistError = null; state.playlistPicked = null;
+  // Clear leftover single-video state so pasting a playlist URL after a
+  // single URL doesn't leave the previous video's info card + subtitle
+  // dropdown showing next to the new playlist card.
+  state.videoInfo = null;
+  state.subtitles = [];
+  renderVideoInfo();
+  renderSubtitlesDropdown();
   state.playlistLoading = true;
+  // Reset the label immediately — otherwise it briefly holds "Download"
+  // (from a prior single-video state) while the playlist enumeration
+  // runs. Once results come back the finally-block below refreshes again.
+  updateDownloadLabel();
   updateFetchStatus(); updateDialogHint(); updateSubmitButtons();
   const mySeq = ++_formatFetchSeq;
   _formatFetchTimer = setTimeout(async () => {
@@ -1265,13 +1313,13 @@ async function submitDialog() {
   // stuffed into a universal container.
   const pickedFormat = (state.formats || []).find(f => f.format_id === state.formatId);
   const container = pickedFormat ? (pickedFormat.container || "") : "";
-  const wantSubs = !!$("dlg-subs")?.checked;
+  const subsLang = ($("dlg-subs")?.value || "").trim();
   const options = isAudio
     ? { audio: true, bitrate: state.audioBitrate }
     : {
         format_id: state.formatId && state.formatId !== "best" ? state.formatId : null,
         container,
-        subs: wantSubs,
+        subs: subsLang,
       };
 
   // Duplicate check for single-URL video/audio adds (playlists and batch
@@ -1342,6 +1390,35 @@ async function filterOutDuplicates(urls) {
   const res = await api().check_duplicates_bulk?.(urls);
   const dupeSet = new Set(res?.duplicates || []);
   return urls.filter(u => !dupeSet.has(u));
+}
+
+// Styled replacement for the browser's native confirm() — that one shows
+// "127.0.0.1:XXXXX says" as its title (pywebview's local origin), which
+// looks broken and confuses users. Options: title, message, confirmText,
+// cancelText, danger (colours the primary red).
+function showConfirm({ title = "Confirm", message = "", confirmText = "Confirm", cancelText = "Cancel", danger = false } = {}) {
+  return new Promise((resolve) => {
+    $("confirm-title").textContent = title;
+    $("confirm-message").textContent = message;
+    const okBtn = $("confirm-ok");
+    okBtn.textContent = confirmText;
+    okBtn.classList.toggle("btn-danger", !!danger);
+    $("confirm-cancel").textContent = cancelText;
+    const cleanup = () => {
+      $("confirm-modal").classList.add("hidden");
+      $("confirm-modal").onclick  = null;
+      $("confirm-close").onclick  = null;
+      $("confirm-cancel").onclick = null;
+      okBtn.onclick               = null;
+      okBtn.classList.remove("btn-danger");  // reset so next confirm doesn't inherit red
+    };
+    const pick = (v) => { cleanup(); resolve(v); };
+    $("confirm-modal").classList.remove("hidden");
+    $("confirm-modal").onclick  = () => pick(false);
+    $("confirm-close").onclick  = () => pick(false);
+    $("confirm-cancel").onclick = () => pick(false);
+    okBtn.onclick               = () => pick(true);
+  });
 }
 
 function promptBulkDuplicates(n, total) {
@@ -1649,7 +1726,18 @@ function wire() {
   $("save-settings").addEventListener("click", async () => { await api().save_settings(state.settings); flashSave(); });
   $("reset-settings").addEventListener("click", async () => { await api().reset_settings?.(); state.settings = await api().get_settings(); renderSettings(); });
   $("export-csv").addEventListener("click",     () => api().export_history_csv?.());
-  $("clear-history").addEventListener("click",  async () => { if (confirm("Clear download history?")) { await api().clear_history?.(); await refreshAnalytics(); renderAnalytics(); } });
+  $("clear-history").addEventListener("click", async () => {
+    const ok = await showConfirm({
+      title: "Clear download history?",
+      message: "This removes all rows from the Analytics history table. Your downloaded files stay on disk. You can't undo this.",
+      confirmText: "Clear history",
+      danger: true,
+    });
+    if (!ok) return;
+    await api().clear_history?.();
+    await refreshAnalytics();
+    renderAnalytics();
+  });
   $("report-issue")?.addEventListener("click",  () => api().open_issues_page?.());
 
   // Copy the currently-selected item's log to the clipboard so users can
@@ -1877,24 +1965,59 @@ function renderPickerList() {
   const q = _pickerFilter.trim().toLowerCase();
   const entries = state.playlist.entries.filter(e =>
     !q || (e.title + " " + (e.uploader || "")).toLowerCase().includes(q));
+  // Human-friendly labels for the availability signal the backend attaches.
+  // "public" = normal downloadable; others are shown as a chip and disabled.
+  const availLabels = {
+    "private":      "Private",
+    "deleted":      "Deleted",
+    "unavailable":  "Unavailable",
+    "copyright":    "Copyright block",
+    "region_blocked":  "Region blocked",
+    "needs_auth":   "Sign-in required",
+    "premium_only": "Premium",
+    "subscriber_only": "Members only",
+    "unlisted":     "Unlisted",
+    "not_yet_scheduled": "Scheduled",
+  };
   entries.forEach(e => {
+    const avail = (e.availability || "public").toLowerCase();
+    // Anything the current session can't download gets disabled — user
+    // can still see the row but can't check it and won't be able to
+    // accidentally send it to the queue where it would just fail.
+    const blocked = avail in availLabels
+      && avail !== "unlisted";  // unlisted works fine if you have the URL, which we do
     const on = _pickerDraft.has(e.url);
-    const row = el("div", { className: "picker-row" });
-    const cb = el("button", { className: "chk" + (on ? " on" : "") });
-    cb.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
+    const row = el("div", { className: "picker-row" + (blocked ? " picker-row-blocked" : "") });
+    // For blocked rows show a lock icon in place of the checkbox — the
+    // empty checkbox looked selectable and users tried to click it.
+    let cb;
+    if (blocked) {
+      cb = el("div", { className: "picker-lock" });
+      cb.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
+    } else {
+      cb = el("button", { className: "chk" + (on ? " on" : "") });
+      cb.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
+    }
     const thumb = el("div", { className: "picker-thumb" });
     if (e.thumbnail) thumb.innerHTML = `<img src="${escapeHtml(e.thumbnail)}" loading="lazy" alt=""/>`;
     const info = el("div", { className: "picker-info" });
-    info.innerHTML = `<div class="picker-title">${escapeHtml(e.title)}</div><div class="picker-meta">${escapeHtml(e.uploader || "")}</div>`;
+    // Availability chip shows RIGHT of the title so it's visible at a glance
+    // without disrupting the layout for the common (all-public) case.
+    const chip = availLabels[avail]
+      ? ` <span class="picker-chip">${escapeHtml(availLabels[avail])}</span>`
+      : "";
+    info.innerHTML = `<div class="picker-title">${escapeHtml(e.title)}${chip}</div><div class="picker-meta">${escapeHtml(e.uploader || "")}</div>`;
     const dur = el("span", { className: "picker-dur", text: e.dur || "—" });
     row.appendChild(cb); row.appendChild(thumb); row.appendChild(info); row.appendChild(dur);
-    const toggle = () => {
-      if (_pickerDraft.has(e.url)) _pickerDraft.delete(e.url);
-      else _pickerDraft.add(e.url);
-      renderPickerList();
-    };
-    row.addEventListener("click", toggle);
-    cb.addEventListener("click", (ev) => { ev.stopPropagation(); toggle(); });
+    if (!blocked) {
+      const toggle = () => {
+        if (_pickerDraft.has(e.url)) _pickerDraft.delete(e.url);
+        else _pickerDraft.add(e.url);
+        renderPickerList();
+      };
+      row.addEventListener("click", toggle);
+      cb.addEventListener("click", (ev) => { ev.stopPropagation(); toggle(); });
+    }
     list.appendChild(row);
   });
   const shown = entries.length;
@@ -1931,10 +2054,16 @@ function wirePicker() {
     // all" while searching "remix" only ticks the remix results and doesn't
     // silently touch entries the user can't see.
     const q = _pickerFilter.trim().toLowerCase();
-    const target = q
+    const target = (q
       ? state.playlist.entries.filter(e =>
           (e.title + " " + (e.uploader || "")).toLowerCase().includes(q))
-      : state.playlist.entries;
+      : state.playlist.entries
+    ).filter(e => {
+      // Skip private / deleted / members-only entries — clicking Select
+      // all shouldn't queue anything the download would just fail on.
+      const a = (e.availability || "public").toLowerCase();
+      return a === "public" || a === "unlisted";
+    });
     if (ev.currentTarget.dataset.mode === "unselect") {
       target.forEach(e => _pickerDraft.delete(e.url));
     } else {

@@ -44,7 +44,7 @@ import yt_dlp
 
 # Displayed in the sidebar and available to JS via `api.app_version()`.
 # Bump per release. Keep in sync with the `-Version` arg to build.ps1.
-APP_VERSION = "v2.0.0"
+APP_VERSION = "v1.0.0"
 
 
 # ---------------------------------------------------------------
@@ -128,6 +128,129 @@ _VIDEO_ID_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Human-readable names for the most common YouTube caption language codes.
+# Fallback is the raw code, so exotic languages still render (as "id"
+# rather than "Indonesian" — an acceptable trade for keeping this list short).
+_LANG_NAMES: Dict[str, str] = {
+    "en": "English",       "en-orig": "English (original)",
+    "en-US": "English (US)","en-GB": "English (UK)",
+    "es": "Spanish",       "es-419": "Spanish (Latin America)",
+    "pt": "Portuguese",    "pt-BR": "Portuguese (Brazil)",
+    "fr": "French",        "de": "German",
+    "it": "Italian",       "ru": "Russian",
+    "ja": "Japanese",      "ko": "Korean",
+    "zh-CN": "Chinese (Simplified)", "zh-TW": "Chinese (Traditional)",
+    "ar": "Arabic",        "hi": "Hindi",
+    "id": "Indonesian",    "tr": "Turkish",
+    "vi": "Vietnamese",    "th": "Thai",
+    "pl": "Polish",        "nl": "Dutch",
+    "sv": "Swedish",       "fa": "Persian",
+    "he": "Hebrew",        "uk": "Ukrainian",
+}
+
+
+def _friendly_dl_error(raw: str) -> str:
+    """Turn a raw yt-dlp error string into something a non-technical user
+    can act on. Falls back to a truncated raw message when no known pattern
+    matches, so we never hide information — just add context for the
+    common cases. Order matters: rate-limit checks first because YouTube's
+    rate-limit response comes disguised as "Video unavailable"."""
+    msg = (raw or "").lower()
+    # Rate-limit responses often present as "Video unavailable" plus a
+    # rate-limit note. Check for the rate-limit signal FIRST so users see
+    # "wait an hour" rather than "video was deleted".
+    if "rate-limit" in msg or "http error 429" in msg or "too many requests" in msg:
+        return ("Rate-limited by YouTube — too many requests from this IP. "
+                "Wait about an hour, use a different network, or set a "
+                "cookies file (signed-in requests get much higher quotas).")
+    if "sign in to confirm your age" in msg or "age-restricted" in msg:
+        return ("Age-restricted video — needs a signed-in adult account. "
+                "Set your cookies file in Settings → Advanced (see the "
+                "Cookies section of the README).")
+    if "sign in to confirm you" in msg and "bot" in msg:
+        return ("YouTube is asking to confirm you're not a bot. "
+                "Set your cookies file in Settings → Advanced.")
+    if "private video" in msg:
+        return ("This video is private. Cookies from an account that was "
+                "invited to view it are required.")
+    if "premieres in" in msg:
+        return "Not released yet — video is scheduled to premiere later."
+    if "requested format is not available" in msg:
+        return ("YouTube didn't return the requested format for this video. "
+                "Try Best available, or re-check for updates on yt-dlp.")
+    if "http error 403" in msg:
+        return ("Forbidden by YouTube — often means the session expired. "
+                "Re-export your cookies file and try again.")
+    if "http error 5" in msg:
+        return "YouTube is having a bad time (5xx server error). Retry in a minute."
+    if "unable to download webpage" in msg or "network is unreachable" in msg:
+        return "Can't reach YouTube — check your internet connection."
+    # Catch-all "video unavailable" comes last so more specific matches
+    # (rate-limit, private, age-restricted) win when both signals appear.
+    if "video unavailable" in msg or "removed by" in msg or "this content isn't available" in msg:
+        return "Video is unavailable — deleted, removed, region-blocked, or your session was rate-limited."
+    return raw[:400]
+
+
+def _list_subtitle_langs(info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Enumerate available subtitle tracks for the UI's language dropdown.
+    Prefers creator-authored (manual) captions; falls back to YouTube's
+    auto-generated ones for the same language. Skips auto-translated
+    variants (codes like "en-pt" mean "English page auto-translated to
+    Portuguese") — those are usually low-quality machine translation and
+    clutter the list with dozens of near-duplicates."""
+    manual = (info.get("subtitles") or {})
+    auto   = (info.get("automatic_captions") or {})
+    seen: Dict[str, Dict[str, Any]] = {}
+
+    def _label(code: str, is_auto: bool) -> str:
+        name = _LANG_NAMES.get(code, code)
+        return f"{name} (auto)" if is_auto else name
+
+    for code in manual:
+        if not code or "-" in code and code not in _LANG_NAMES:
+            # Keep well-known regional variants ("es-419", "pt-BR"), drop
+            # arbitrary auto-translation codes ("en-pt", "en-zh-CN").
+            if len(code.split("-")) > 1 and code not in _LANG_NAMES:
+                continue
+        seen[code] = {"code": code, "label": _label(code, False), "auto": False}
+    for code in auto:
+        if code in seen:
+            continue
+        # Auto-generated captions include auto-TRANSLATIONS with codes
+        # like "en-pt". Skip anything that isn't a plain language code
+        # (or one of the region variants we recognise).
+        if "-" in code and code not in _LANG_NAMES:
+            continue
+        seen[code] = {"code": code, "label": _label(code, True), "auto": True}
+
+    # Sort: English first (most common request), then alphabetical by label.
+    def _sort_key(row: Dict[str, Any]) -> tuple:
+        english = 0 if row["code"].startswith("en") else 1
+        return (english, row["label"].lower())
+    return sorted(seen.values(), key=_sort_key)
+
+
+def _normalize_url(url: str) -> str:
+    """Strip URL params that make yt-dlp misbehave. In particular:
+        watch?v=X&list=RD_X&start_radio=1&pp=...
+    tells yt-dlp to build an auto-radio playlist context, which triples
+    the metadata fetch time even for a single-video download. If the URL
+    is unambiguously a single-video link (has `v=`) and isn't a
+    /playlist? page, collapse it to `watch?v=<id>` and keep only `t=`
+    (start-time) if present. Leaves genuine playlist URLs alone."""
+    if not url or "playlist?" in url:
+        return url  # user genuinely wants a playlist page — hands off
+    vid = _extract_video_id(url)
+    if not vid:
+        return url  # channel / user / other; nothing to normalize
+    # Preserve start-time param if present (harmless for downloads; the
+    # user may care about it for their own reference).
+    m = re.search(r"[?&]t=([0-9hms]+)", url)
+    tail = f"&t={m.group(1)}" if m else ""
+    return f"https://www.youtube.com/watch?v={vid}{tail}"
+
+
 def _extract_video_id(url: str) -> str:
     """Return YouTube's 11-ish-char video id if `url` is a single-video
     link, otherwise empty string (playlists, channel pages, etc.).
@@ -190,11 +313,11 @@ def _toast_icon_path() -> str:
     return ""
 
 
-def _fire_batch_toast(done: int, failed: int) -> None:
-    """Windows toast notification when a batch of downloads finishes.
-    Silent no-op on non-Windows, if winotify isn't available, or when the
-    app is already in focus (the user doesn't need a toast on top of the
-    UI they're actively looking at)."""
+def _fire_item_toast(video_title: str, status: str) -> None:
+    """Windows toast for a single completed / failed download. Shows the
+    video's own title so a queue of 5 downloads produces 5 clear toasts,
+    each identifying its own video. Silent on non-Windows, missing
+    winotify, or when the app is already focused."""
     if sys.platform != "win32":
         return
     if _app_is_foreground():
@@ -203,23 +326,19 @@ def _fire_batch_toast(done: int, failed: int) -> None:
         from winotify import Notification
     except ImportError:
         return
-    total = done + failed
-    if total == 1:
-        title = "Download complete" if done else "Download failed"
-        msg = "1 file finished" if done else "1 file failed"
+    if status == "Done":
+        head = "Download complete"
     else:
-        title = "Downloads finished"
-        parts = []
-        if done:   parts.append(f"{done} complete")
-        if failed: parts.append(f"{failed} failed")
-        msg = " · ".join(parts) or f"{total} finished"
+        head = "Download failed"
+    # Cap title length so the toast body doesn't overflow.
+    body = (video_title[:97] + "…") if len(video_title) > 100 else video_title
     try:
         icon = _toast_icon_path()
         # app_id must match the AUMID stamped on the Start Menu shortcut
         # by install.ps1 (SetCurrentProcessExplicitAppUserModelID in
         # main.py registers the same value at process start). Windows
         # uses that ID to look up the icon for the toast.
-        kwargs = {"app_id": "YouTManager", "title": title, "msg": msg}
+        kwargs = {"app_id": "YouTManager", "title": head, "msg": body}
         if icon:
             kwargs["icon"] = icon
         Notification(**kwargs).show()
@@ -385,12 +504,6 @@ class DownloadManager:
         self._futures: Dict[int, Future] = {}
         self._cancelled: set[int] = set()  # ids the user asked to stop
         self._last_emit: Dict[int, float] = {}  # id -> last emit ts, for throttling
-        # Batch-complete toast tracking. Flipped True on first Downloading
-        # status; when the queue fully settles (no Queued/Downloading/Paused
-        # items left) we fire a Windows toast and flip it back False.
-        self._batch_active: bool = False
-        self._batch_done_count: int = 0
-        self._batch_fail_count: int = 0
         # Per-item captured log lines from yt-dlp. Persisted to
         # <config>/logs/<id>.log so users can copy-paste the exact log
         # into a bug report even after restarting the app. Each entry is
@@ -412,8 +525,8 @@ class DownloadManager:
     def add(self, url: str, format_id: Optional[str] = None,
             audio: bool = False, bitrate: str = "192",
             playlist_folder: str = "", container: str = "",
-            force: bool = False, subs: bool = False) -> int:
-        url = url.strip()
+            force: bool = False, subs: str = "") -> int:
+        url = _normalize_url(url.strip())
         if not url:
             raise ValueError("empty url")
         with self._lock:
@@ -447,7 +560,13 @@ class DownloadManager:
             # to the output filename instead of overwriting the earlier file.
             item["is_redownload"] = bool(force)
             # Whether to also fetch subtitles for this item (English + auto).
-            item["subs"] = bool(subs)
+            # subs = language code string ("en", "es", "en-orig", …) or "".
+            # Bool from legacy callers gets normalized to "en" for backward
+            # compat during the rollout.
+            if isinstance(subs, bool):
+                item["subs"] = "en" if subs else ""
+            else:
+                item["subs"] = str(subs or "").strip()
             self._items.append(item)
         self._emit_queue()
         self._persist()
@@ -459,7 +578,7 @@ class DownloadManager:
     def add_batch(self, urls: List[str], format_id: Optional[str] = None,
                   audio: bool = False, bitrate: str = "192",
                   playlist_folder: str = "", container: str = "",
-                  force: bool = False, subs: bool = False) -> List[int]:
+                  force: bool = False, subs: str = "") -> List[int]:
         return [self.add(u, format_id=format_id, audio=audio, bitrate=bitrate,
                          playlist_folder=playlist_folder, container=container,
                          force=force, subs=subs)
@@ -484,34 +603,40 @@ class DownloadManager:
             out = captured.get("output_path")
             if out and Path(out).exists():
                 # Completed download: delete THIS row's exact file plus its
-                # own partial siblings only. A title-glob would also match
-                # a sibling "Title (1).mp4" from a re-downloaded duplicate
-                # and wipe it — not what the user asked for.
+                # own partial + subtitle + description siblings. A title-glob
+                # would also match a sibling "Title (1).mp4" from a
+                # re-downloaded duplicate and wipe it — this stem-based glob
+                # only catches files derived from THIS download.
                 target = Path(out)
                 try:
                     target.unlink()
                 except OSError:
                     pass
                 for p in target.parent.glob(f"{target.stem}*"):
-                    if p.suffix.lower() in (".part", ".ytdl", ".description"):
+                    if p.suffix.lower() in (".part", ".ytdl", ".description",
+                                             ".vtt", ".srt", ".ass", ".info.json"):
                         try:
                             p.unlink()
                         except OSError:
                             pass
             else:
                 # Never completed (Queued / Paused / Failed): fall back to
-                # a title-based glob to sweep leftover partials. Skips
-                # finished-file extensions to avoid clobbering an in-flight
-                # duplicate row's actual file.
+                # a title-based glob to sweep partials AND any subtitles that
+                # were downloaded before the video stream started (subs are
+                # done first in yt-dlp's pipeline, so they exist even if the
+                # video part never landed). Skip finished-video extensions to
+                # avoid clobbering an in-flight duplicate row's actual file.
                 title = (captured.get("title") or "").strip()
                 if title:
                     base_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
                     sub = captured.get("playlist_folder") or ""
                     download_dir = base_dir / sub if sub else base_dir
                     stem = title.replace(":", "-").replace("/", "-").replace("?", "")[:120]
-                    for pattern in (f"{stem}*.part*", f"{stem}*.ytdl"):
+                    for pattern in (f"{stem}*.part*", f"{stem}*.ytdl",
+                                    f"{stem}*.vtt", f"{stem}*.srt", f"{stem}*.ass"):
                         for p in download_dir.glob(pattern):
-                            if p.suffix.lower() in (".part", ".ytdl"):
+                            if p.suffix.lower() in (".part", ".ytdl",
+                                                     ".vtt", ".srt", ".ass"):
                                 try:
                                     p.unlink()
                                 except OSError:
@@ -819,12 +944,6 @@ class DownloadManager:
         if is_terminal or now - last >= 0.1:
             self._last_emit[id_] = now
             self._emit_progress(id_)
-        if status == "Downloading":
-            self._batch_active = True
-        if status == "Done":
-            self._batch_done_count += 1
-        elif status == "Failed":
-            self._batch_fail_count += 1
         if status in ("Done", "Failed"):
             # A download resolved — persist so restart doesn't lose it,
             # and let the bridge log it to history.
@@ -833,26 +952,17 @@ class DownloadManager:
                 self._on_finished(snap)
             except Exception:
                 traceback.print_exc()
-            self._maybe_batch_complete_toast()
+            # One toast per finished item with THAT item's title —
+            # simpler and more informative than "N complete since queue
+            # was empty" which accumulates confusingly across sessions.
+            self._maybe_item_toast(snap, status)
 
-    def _maybe_batch_complete_toast(self) -> None:
-        """Fires a Windows toast when the last active download resolves.
-        A "batch" here is loosely anything the user kicked off during the
-        current session — no need to make them explicitly group items."""
-        if not self._batch_active:
-            return
-        with self._lock:
-            pending = any(i.get("status") in ("Queued", "Downloading", "Paused")
-                          for i in self._items)
-        if pending:
-            return
-        done, failed = self._batch_done_count, self._batch_fail_count
-        self._batch_active = False
-        self._batch_done_count = 0
-        self._batch_fail_count = 0
-        if done + failed == 0:
-            return
-        _fire_batch_toast(done, failed)
+    def _maybe_item_toast(self, item: Dict[str, Any], status: str) -> None:
+        """Fires a Windows toast for a single completed / failed download.
+        Suppressed when the app is focused (user already sees the row
+        transition on-screen — a toast on top is just noise)."""
+        title = (item.get("title") or item.get("file") or "Download").strip()
+        _fire_item_toast(title, status)
 
     def _emit_progress(self, id_: int) -> None:
         with self._lock:
@@ -945,10 +1055,20 @@ class DownloadManager:
         """Try each player_client, with and without cookies, until one works.
 
         Order of attempts:
-          1. tv_embedded + cookies   (best quality, satisfies bot check)
-          2. tv_embedded no cookies  (in case cookies were locked)
-          3. android + cookies       (bot-bypass, but only 360p)
-          4. android no cookies
+          1. (None) defaults + cookies   — visionos/android_vr; anonymous
+          2. (None) defaults no cookies
+          3. tv_embedded + cookies       — needed for age-gated content
+          4. tv_embedded no cookies
+          5. android + cookies           — bot-bypass, only 360p
+          6. android no cookies
+
+        Special case: if a working client returns info flagged
+        age_limit >= 18 but WITHOUT giving us cookies-authenticated video
+        formats (because the default clients don't auth), retry with the
+        tv_embedded + cookies combo, which does authenticate age-gated
+        video streams. Otherwise the picker shows a video and the
+        download then fails with "Sign in to confirm your age".
+
         Returns the info dict (with `_extraction_meta` attached describing
         which combo succeeded and whether cookies were unreachable) from
         the first success; raises the last real exception (non-cookie-lock)
@@ -957,6 +1077,8 @@ class DownloadManager:
         last_exc: Optional[Exception] = None
         cookie_lock_seen = False
         cookies_configured = self._has_cookies()
+        first_info: Optional[Dict[str, Any]] = None
+        first_meta: Optional[Dict[str, Any]] = None
         for client in self._CLIENT_CHAIN:
             cookie_modes = [True, False] if cookies_configured else [False]
             for use_cookies in cookie_modes:
@@ -966,14 +1088,44 @@ class DownloadManager:
                     ) as ydl:
                         info = ydl.extract_info(url, download=False)
                     if info:
-                        # Attach so callers (and the UI) can tell why we
-                        # may have been forced onto a lower-quality client.
-                        info["_extraction_meta"] = {
+                        meta = {
                             "client": client,
                             "used_cookies": use_cookies,
                             "cookies_configured": cookies_configured,
                             "cookies_locked": cookie_lock_seen,
                         }
+                        # Age-restricted content needs an authenticated
+                        # client (tv_embedded/web). If the current client
+                        # is an anonymous one and we have cookies, retry
+                        # explicitly with tv_embedded + cookies so the
+                        # download step actually gets valid video URLs.
+                        age_gated = int(info.get("age_limit") or 0) >= 18
+                        auth_client = client == ["tv_embedded"] or client == ["web"]
+                        if age_gated and cookies_configured and not auth_client:
+                            first_info, first_meta = info, meta
+                            self._log_extract("age-gated video, retrying with tv_embedded + cookies")
+                            try:
+                                with yt_dlp.YoutubeDL(
+                                    self._ydl_opts(extra, player_client=["tv_embedded"], use_cookies=True)
+                                ) as ydl2:
+                                    info2 = ydl2.extract_info(url, download=False)
+                                if info2:
+                                    info2["_extraction_meta"] = {
+                                        "client": ["tv_embedded"],
+                                        "used_cookies": True,
+                                        "cookies_configured": cookies_configured,
+                                        "cookies_locked": cookie_lock_seen,
+                                    }
+                                    return info2
+                            except Exception:
+                                # tv_embedded retry failed; fall through and
+                                # return the anonymous info we already had —
+                                # at least gives the caller partial metadata
+                                # so the download can fail with a real error.
+                                pass
+                            info["_extraction_meta"] = first_meta
+                            return info
+                        info["_extraction_meta"] = meta
                         return info
                 except Exception as exc:
                     # Don't record cookie-lock as the "real" error; keep
@@ -986,6 +1138,16 @@ class DownloadManager:
         if last_exc:
             raise last_exc
         raise RuntimeError("no info returned from any player_client")
+
+    def _log_extract(self, msg: str) -> None:
+        """Small helper so age-restricted retries show up somewhere users
+        can see — printed to stderr, ends up in the frozen exe's crash log
+        if PyInstaller ever attaches a console."""
+        try:
+            sys.stderr.write(f"[extract] {msg}\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
 
     def _run(self, id_: int, fresh: bool = True) -> None:
         """Fetch metadata + download in a single worker task.
@@ -1032,6 +1194,26 @@ class DownloadManager:
                         info = None
                 if info:
                     break
+            # Age-restricted retry: default clients (visionos/android_vr)
+            # extract metadata OK but return unauthenticated video URLs
+            # that fail with "Sign in to confirm your age" at download
+            # time. If we got age-gated metadata via anything other than
+            # tv_embedded, retry with tv_embedded + cookies so the
+            # download step gets URLs the actual server will honour.
+            if info and cookies_configured:
+                age_gated = int(info.get("age_limit") or 0) >= 18
+                if age_gated and chosen_client != ["tv_embedded"]:
+                    try:
+                        with yt_dlp.YoutubeDL(
+                            self._ydl_opts(player_client=["tv_embedded"], use_cookies=True)
+                        ) as ydl_age:
+                            info_age = ydl_age.extract_info(url, download=False)
+                        if info_age:
+                            info = info_age
+                            chosen_client = ["tv_embedded"]
+                            chosen_use_cookies = True
+                    except Exception:
+                        pass  # keep the anonymous metadata as a fallback
             if not info and last_meta_exc:
                 self._update(id_, error=str(last_meta_exc)[:400])
 
@@ -1131,6 +1313,30 @@ class DownloadManager:
                     raise KeyboardInterrupt("cancelled by user")
                 status = d.get("status")
                 if status == "downloading":
+                    fname = (d.get("tmpfilename") or d.get("filename") or "").lower()
+                    # Subtitles are tiny and quick — hide them entirely so
+                    # they don't churn the progress bar for a fraction of
+                    # a second each language.
+                    if fname.endswith((".vtt", ".srt", ".ass")):
+                        return
+                    # Detect audio-only sub-download via multiple signals —
+                    # info_dict.vcodec isn't always set at hook time, so
+                    # also check for a missing height.
+                    info_d = d.get("info_dict") or {}
+                    is_audio_stage = (
+                        info_d.get("vcodec") == "none"
+                        or (info_d.get("acodec") not in (None, "none")
+                            and not info_d.get("height"))
+                    )
+                    if is_audio_stage:
+                        # Don't touch pct (video already climbed to 99 —
+                        # resetting to 0 for audio is confusing). Do show
+                        # the current audio speed so the row isn't
+                        # apparently frozen while ~200 MB of opus streams in.
+                        self._update(id_,
+                                     speed=f"audio · {_fmt_speed(d.get('speed'))}",
+                                     eta=_fmt_eta(d.get("eta")))
+                        return
                     downloaded = d.get("downloaded_bytes") or 0
                     total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                     # For DASH videos (all YouTube 720p+), `total_bytes`
@@ -1144,6 +1350,12 @@ class DownloadManager:
                         pct = int(frag_i / frag_n * 100) if frag_i else 0
                     else:
                         pct = int(downloaded / total * 100) if total else 0
+                    # Cap mid-download at 99 — "100" is reserved for the
+                    # final Done state, so a video with subtitles doesn't
+                    # briefly show 100% between the .vtt finishing and the
+                    # actual video stream starting.
+                    if pct >= 100:
+                        pct = 99
                     self._update(
                         id_,
                         pct=pct,
@@ -1156,26 +1368,29 @@ class DownloadManager:
                         # pp_hook below stat()s the real file when done.
                     )
                 elif status == "finished":
-                    # Provisional path — for simple single-file downloads
-                    # this is the final file. For anything that needs
-                    # merging (video+audio) or postprocessing (MP3
-                    # extraction), pp_hook below will overwrite it with
-                    # the real output.
-                    final_name = d.get("filename")
-                    updates = {"pct": 100, "speed": "—", "eta": "—",
-                               "output_path": final_name}
-                    if final_name:
-                        updates["file"] = Path(final_name).name
-                    self._update(id_, **updates)
+                    # yt-dlp's "finished" fires ONCE PER SUB-DOWNLOAD (subtitle
+                    # .vtt, video-only .f137.mp4, audio-only .f251.webm...).
+                    # If we set pct=100 + swap the display filename on each
+                    # one, the row shows "1%, 100%, 0%, 82%..." fluctuations
+                    # and the name flips to the last subtitle file. Just clear
+                    # speed/eta between stages — the final Done + pp_hook
+                    # will set pct=100 and the real merged filename.
+                    self._update(id_, speed="—", eta="—")
 
             def pp_hook(d: Dict[str, Any]) -> None:
-                """Fires after each postprocessor step. The last one that
-                fires is the true final file (mp3 after FFmpegExtractAudio,
-                mp4 after FFmpegMerger, etc.). We also use it to correct
-                `size` from the actual file on disk, since the value we
-                had during download was per-fragment (DASH) or pre-mux
-                (MP3 extraction) and often much smaller than reality."""
-                if d.get("status") != "finished":
+                """Fires around each postprocessor step (started/finished).
+                On `started` we flip the Speed column to "Merging…" so the
+                user sees SOMETHING is happening — otherwise the row sits
+                at 99% silently while ffmpeg muxes video+audio (can be a
+                minute on a large file) and looks stuck. On `finished` we
+                correct `size`/`file`/`output_path` from the actual file
+                on disk (the value we had during download was per-fragment
+                and often much smaller than reality)."""
+                status = d.get("status")
+                if status == "started":
+                    self._update(id_, speed="Merging…", eta="—")
+                    return
+                if status != "finished":
                     return
                 info = d.get("info_dict") or {}
                 final = (info.get("filepath")
@@ -1209,7 +1424,10 @@ class DownloadManager:
                 is_audio = bool(cur.get("audio_only"))
                 bitrate = str(cur.get("audio_bitrate") or "192")
                 container = (cur.get("container") or "").lower()
-                want_subs = bool(cur.get("subs"))
+                # subs is now a language code string (or "" for none).
+                # Empty / falsy string means "no subtitles requested".
+                subs_lang = str(cur.get("subs") or "").strip()
+                want_subs = bool(subs_lang)
 
             extra_opts: Dict[str, Any] = {
                 "outtmpl": outtmpl,
@@ -1223,13 +1441,14 @@ class DownloadManager:
                 "continuedl": not fresh,
                 "overwrites": fresh,
             }
-            # Per-item subtitle download (checkbox in Add URL). English +
-            # auto-generated so it works on videos without a proper caption
-            # track; format is vtt because it's the most player-friendly.
+            # Per-item subtitle download (language picked in the Add URL
+            # dropdown). Fetches that ONE language and embeds it into the
+            # video container so the user ends up with a single .mp4 that
+            # has toggleable soft subs — not a loose .vtt sitting alongside.
             if want_subs and not is_audio:
                 extra_opts["writesubtitles"]      = True
                 extra_opts["writeautomaticsub"]   = True
-                extra_opts["subtitleslangs"]      = ["en", "en.*"]
+                extra_opts["subtitleslangs"]      = [subs_lang]
                 extra_opts["subtitlesformat"]     = "vtt"
             # Global speed limit — parsed from a human-friendly Settings
             # string like "500K" or "1M" (yt-dlp wants bytes/sec as int).
@@ -1263,6 +1482,14 @@ class DownloadManager:
                 )
                 if target_container in ("mp4", "webm", "mkv", "m4a"):
                     extra_opts["merge_output_format"] = target_container
+                # If the user asked for subtitles, embed them into the
+                # container and delete the separate .vtt file after — one
+                # tidy .mp4 with toggleable soft subs beats a .mp4 plus a
+                # loose .vtt sitting next to it.
+                if want_subs:
+                    extra_opts["postprocessors"] = [
+                        {"key": "FFmpegEmbedSubtitle", "already_have_subtitle": False},
+                    ]
 
             # Reuse the same (player_client, use_cookies) combo that
             # succeeded during metadata extraction — otherwise the download
@@ -1303,8 +1530,9 @@ class DownloadManager:
                 self._update(id_, status="Paused", speed="—", eta="—")
                 self._log(id_, "warn", "[paused] cancelled by user")
             else:
+                friendly = _friendly_dl_error(str(exc))
                 self._update(id_, status="Failed", speed="—", eta="—",
-                             error=str(exc)[:400])
+                             error=friendly)
                 self._log(id_, "bad", f"[error] {exc}")
         except Exception as exc:
             self._update(id_, status="Failed", speed="—", eta="—",
@@ -1641,7 +1869,7 @@ class PyBridge:
             playlist_folder=options.get("playlist_folder") or "",
             container=options.get("container") or "",
             force=bool(options.get("force")),
-            subs=bool(options.get("subs")),
+            subs=options.get("subs") or "",
         )
         return {"id": id_}
 
@@ -1655,7 +1883,7 @@ class PyBridge:
             playlist_folder=options.get("playlist_folder") or "",
             container=options.get("container") or "",
             force=bool(options.get("force")),
-            subs=bool(options.get("subs")),
+            subs=options.get("subs") or "",
         )}
 
     def get_playlist_entries(self, url: str) -> Dict[str, Any]:
@@ -1699,12 +1927,40 @@ class PyBridge:
                 # Pick a small one — playlist checklist is a compact view.
                 small = [t for t in thumbs if t.get("url") and (t.get("width") or 0) <= 320]
                 thumb = (small[-1] if small else thumbs[-1]).get("url", "")
+            # Availability signal — yt-dlp populates this from playlist page
+            # metadata WITHOUT hitting the video URL, so private / deleted /
+            # region-blocked entries can be flagged in the picker before the
+            # user tries to download them. Values seen in the wild:
+            #   "public", "unlisted", "needs_auth", "subscriber_only",
+            #   "premium_only", "private", "not_yet_scheduled", None.
+            availability = (e.get("availability") or "").lower()
+            title = e.get("title") or ""
+            # Deleted/unavailable videos come through with a title marker
+            # rather than a proper title. Coerce those into an availability
+            # flag so the picker can render them consistently. Covers:
+            # user-deleted, YouTube-removed, copyright takedowns, region
+            # blocks, and "video unavailable" (catch-all).
+            title_lower = title.lower()
+            if not availability:
+                if "[deleted" in title_lower or "[removed" in title_lower:
+                    availability = "deleted"
+                elif "[private" in title_lower:
+                    availability = "private"
+                elif "copyright" in title_lower and ("[" in title_lower or "unavailable" in title_lower):
+                    availability = "copyright"
+                elif ("not available in your country" in title_lower
+                      or "not available in your region" in title_lower
+                      or "blocked in your country" in title_lower):
+                    availability = "region_blocked"
+                elif "[unavailable" in title_lower or "video unavailable" in title_lower or not title:
+                    availability = "unavailable"
             entries.append({
                 "url": vid_url,
-                "title": e.get("title") or "?",
+                "title": title or "?",
                 "dur": _fmt_duration(dur),
                 "uploader": e.get("uploader") or "",
                 "thumbnail": thumb,
+                "availability": availability or "public",
             })
         return {
             "title": info.get("title") or "Playlist",
@@ -1722,7 +1978,7 @@ class PyBridge:
         available" default at the top. Video-only streams get audio size
         added since we'll be muxing them with the best audio track.
         """
-        url = url.strip()
+        url = _normalize_url(url.strip())
         if not url:
             return {"error": "empty url"}
         try:
@@ -1854,6 +2110,7 @@ class PyBridge:
             "thumbnail": self._mgr._pick_thumbnail(info) if info else "",
             "views":     f"{int(views):,}" if isinstance(views, (int, float)) else None,
             "formats":   out,
+            "subtitles": _list_subtitle_langs(info) if info else [],
             "note":      note,
         }
 
@@ -2138,13 +2395,13 @@ class PyBridge:
             return "?"
 
     def ytdlp_check_update(self) -> Dict[str, Any]:
-        """Query PyPI for the latest yt-dlp release. Only checks — doesn't
-        download anything. Returns current + latest + a boolean flag.
+        """Query PyPI for the latest STABLE yt-dlp release. Only checks —
+        doesn't download anything. Returns current + latest + a flag.
 
-        Includes pre-releases (nightlies). YouTube ships breaking changes
-        on ~monthly cadence and yt-dlp fixes them in nightlies days before
-        the next stable — locking to stable means "Up to date" lies for
-        days at a time when things are actively broken."""
+        Stable-only by design: the recent 2026.7.23 nightly dropped many
+        MP4 filesize fields (blanking the size column in our dropdown),
+        which is worse UX than being one week behind on a YouTube fix.
+        Users who need a nightly can pip-install manually."""
         try:
             import urllib.request
             req = urllib.request.Request(
@@ -2155,25 +2412,23 @@ class PyBridge:
                 data = json.loads(resp.read())
         except Exception as exc:
             return {"error": str(exc)[:200]}
-        # info.version is stable-only; releases dict has every version
-        # ever published, including pre-releases. Pick the highest.
-        releases = list((data.get("releases") or {}).keys())
-        latest = max(releases, key=self._version_tuple, default="") if releases else ""
+        # info.version is the latest STABLE — exactly what we want here.
+        latest = (data.get("info") or {}).get("version") or ""
         current = self.ytdlp_version()
         return {
             "current": current,
             "latest": latest,
-            "is_prerelease": bool(latest and "dev" in latest.lower()),
+            "is_prerelease": False,  # stable-only lookup
             "update_available": self._version_is_newer(latest, current),
         }
 
     def ytdlp_update(self) -> Dict[str, Any]:
-        """Actually run `pip install -U --pre yt-dlp` in the current Python.
-        `--pre` lets us grab nightlies when YouTube has broken the current
-        stable release. Requires an app restart to load the new module."""
+        """Actually run `pip install -U yt-dlp` (stable only). Matches
+        ytdlp_check_update — we only install what we told the user is
+        available. Requires an app restart to load the new module."""
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-U", "--pre", "yt-dlp"],
+                [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
                 capture_output=True, text=True, timeout=180,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )

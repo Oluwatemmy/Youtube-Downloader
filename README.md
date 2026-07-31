@@ -42,40 +42,76 @@ to play in VLC / Movies & TV / whatever, or drag into a video editor.
   source audio stream
 - **Playlist support** — paste a playlist URL, get a checklist of videos;
   batch or subset, all queued into a subfolder named after the playlist
-- **Subtitle download** — checkbox in Add URL fetches English captions
-  (real + auto-generated) as `.vtt` alongside the video
+- **Subtitle dropdown in Add URL** — lists every language YouTube has for
+  the video (English, Spanish, French, etc., with `(auto)` on
+  machine-transcribed tracks). Pick one and it gets embedded into the
+  `.mp4` as a soft subtitle track, so the final file is one tidy video
+  with toggleable subs in VLC / Movies & TV. Hidden when the video has
+  no subtitles or you're in Audio (MP3) mode.
 - **Duplicate detection** — paste a URL you've already downloaded and get
-  a prompt showing how many copies you have and the latest filename;
-  Open file / Show in queue / Download again. "Download again" saves as
-  `Title (1).mp4` so the original stays intact; prompt is skipped if you'd
-  already deleted the earlier file
+  a styled prompt showing how many copies you have and the latest
+  filename; Open file / Show in queue / Download again. "Download again"
+  saves as `Title (1).mp4` so the original stays intact. Prompt is
+  skipped if you'd already deleted the earlier file. Bulk playlist and
+  multi-URL adds get a single summary prompt ("3 of 20 already exist —
+  skip duplicates / download all / cancel").
+- **Playlist picker with availability chips** — enumerates the whole
+  playlist quickly, marks Private / Deleted / Copyright-blocked /
+  Region-blocked / Members-only entries with a chip and a lock icon so
+  you don't accidentally queue up dead URLs
 - **Bundled QuickJS** for YouTube's `nsig` signature decryption — no
   external Node or Deno install needed. Ships in `bin/qjs.exe` (~1.8 MB)
+- **Age-restricted retry** — when yt-dlp's default clients hit an age
+  gate, the app automatically retries with the `tv_embedded` player
+  client + cookies (the only combo that YouTube accepts for age-gated
+  content). Needs cookies from a signed-in adult account.
+- **URL normalization** — strips the auto-radio garbage YouTube attaches
+  to Music links (`&list=RD…&start_radio=1&pp=…`) so single-video adds
+  don't waste time enumerating a bogus playlist context
 - **Cookies-friendly** — a first-run wizard walks you through exporting
   `cookies.txt` from a browser extension so YouTube's 2026 bot check
   doesn't gate you to 360p
 - **Auto-installs FFmpeg** on first launch (~100 MB, one-time) so 1080p+
   merging works without any manual setup
 - **Live per-item speed chart and log** — click a row, watch its throughput
-  in the Speed tab, read yt-dlp's own output in the Log tab
+  in the Speed tab, read yt-dlp's own output in the Log tab. Logs persist
+  to disk across app restarts and have a **Copy log** button so you can
+  paste the exact output into a bug report.
+- **Clear progress across stages** — during a video with subtitles + audio,
+  the progress bar climbs monotonically instead of bouncing. Speed column
+  shows what's currently happening: `4.5 MB/s ETA 2m` (video) →
+  `audio · 1.3 MB/s ETA 4m` (audio stream) → `Merging…` (ffmpeg mux) →
+  Done at 100%.
 - **Real Pause vs Stop** — pause keeps the `.part` file so Resume continues;
   Stop discards it so the next attempt starts fresh
+- **Delete cleans up thoroughly** — removes the video file, its `.part`
+  fragments, any `.vtt` / `.srt` subtitles, and the `.description` / info
+  files. Won't touch sibling `Title (1).mp4` duplicates from prior
+  re-downloads.
 - **Windows-native window** — proper drag, resize, min/max, snap-to-edges;
   dark and light themes
-- **Windows toast on batch complete** — when the last active download
-  resolves, you get a notification with the count (`3 complete · 1 failed`).
-  Suppressed if the app is already focused
+- **Per-video Windows toast** — one notification per completed / failed
+  download with that video's title, so a queue of 5 videos produces 5
+  clear toasts (not "5 complete" accumulated). Suppressed while the app
+  window is focused.
 - **Speed limit** — per-download cap in Settings → Advanced (`500K`, `1M`);
   useful when you don't want a queue to hog bandwidth
 - **Persistent queue and history** — quit mid-download, reopen, everything
-  is there. Analytics tab has date-range + status + search filters, paginated
-  history, and shows totals + per-day chart
+  is there. Analytics tab has date-range + status + search filters,
+  paginated history table, and shows totals + per-day chart. History rows
+  show the actual on-disk filename so re-downloaded copies read as
+  `Title`, `Title (1)`, `Title (2)`.
 - **Clipboard detection** — copy a YouTube URL, alt-tab to the app, get a
   one-click prompt to add it
-- **yt-dlp auto-updater** — Settings has a "Check for updates" button and a
-  quiet weekly check that shows a dot in the sidebar when a new release is
-  out. Includes pre-releases so you have a fix path when YouTube breaks
-  the current stable and only a nightly has the patch
+- **Friendly errors** — raw yt-dlp errors get translated into actionable
+  messages: rate-limited (wait an hour or use cookies), age-restricted
+  (set cookies), private, region-blocked, 403 (session expired), 5xx
+  (YouTube outage), network unreachable
+- **yt-dlp auto-updater** — Settings has a "Check for updates" button and
+  a quiet weekly check that shows a dot in the sidebar when a new release
+  is out. Sticks to stable releases (nightlies can regress the size column).
+- **Report an issue** — link in the sidebar footer and Settings that opens
+  the GitHub issues page in your default browser
 - **Crash handler** — uncaught errors surface as a real dialog with the
   traceback and a Copy button, instead of dying to stderr
 
@@ -272,11 +308,16 @@ progress and log events push the other way via
 
 Rough order of what's next:
 
+- Code-signed installer — removes the SmartScreen prompt and the "unknown
+  publisher" reputation reset on every rebuild
+- AUMID stamping fix — so toast notifications pick up the app icon
+  (currently they fall back to a generic Windows icon)
 - Minimize to tray for long-running queues
 - Auto-follow OS theme (currently a manual toggle)
-- Code-signed installer (removes the SmartScreen warning)
-- PO token / bgutil sidecar — if / when YouTube starts requiring it for
-  clients we depend on (currently not needed; QuickJS handles the common case)
+- Drag-and-drop URLs from the browser
+- PO token / bgutil sidecar — for the "age-restricted and only available
+  on YouTube" class of videos that need a full authenticated web client.
+  Currently not shipped because it adds ~250 MB of Node runtime.
 
 ## Credits
 

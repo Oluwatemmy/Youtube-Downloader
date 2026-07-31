@@ -82,8 +82,8 @@
             <button data-detail="Speed">Speed</button>
             <div class="detail-title"></div>
             <span class="detail-file" id="detail-file">—</span>
-            <button class="detail-toggle" id="detail-toggle" title="Show / hide details">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 15l6-6 6 6"/></svg>
+            <button class="detail-toggle" id="detail-toggle" title="Show or hide the Info / Log / Speed panel">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>
             </button>
           </div>
           <div class="detail-body" id="detail-body"><!-- pane -->
@@ -307,10 +307,11 @@
           </div>
         </div>
         <div class="field" style="margin-top: 10px" id="subs-field">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--tx);cursor:pointer">
-            <input type="checkbox" id="dlg-subs" style="margin:0"/>
-            <span>Also download subtitles (English + auto-generated if available)</span>
-          </label>
+          <span class="field-label">Subtitles</span>
+          <select class="set-select" id="dlg-subs" style="width:100%">
+            <option value="">None</option>
+          </select>
+          <div id="subs-hint" style="font-size:11px;color:var(--tx3);margin-top:4px" hidden></div>
         </div>
       </div>
     </div>
@@ -388,6 +389,32 @@
       <button class="btn-quiet"  id="bdup-cancel">Cancel</button>
       <button class="btn-plain"  id="bdup-force">Download all</button>
       <button class="btn-accent" id="bdup-skip">Skip duplicates</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ generic confirm modal (Clear history, etc.) ============ -->
+<div class="modal-backdrop hidden" id="confirm-modal">
+  <div class="modal" style="width:460px" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div id="confirm-icon-wrap" style="width:26px;height:26px;border-radius:6px;background:var(--warnS);display:flex;align-items:center;justify-content:center">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--warn)"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+        </div>
+        <span class="t" id="confirm-title">Confirm</span>
+      </div>
+      <div class="title-spacer"></div>
+      <button class="modal-close" id="confirm-close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p id="confirm-message" style="font-size:13px;line-height:1.55;color:var(--tx2);margin:0"></p>
+    </div>
+    <div class="modal-foot">
+      <div class="title-spacer"></div>
+      <button class="btn-quiet"  id="confirm-cancel">Cancel</button>
+      <button class="btn-accent" id="confirm-ok">Confirm</button>
     </div>
   </div>
 </div>
