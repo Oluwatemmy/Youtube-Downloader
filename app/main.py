@@ -159,7 +159,23 @@ def _ensure_ffmpeg() -> None:
 # 4. window bootstrap
 # ---------------------------------------------------------------
 
+def _register_aumid() -> None:
+    """Tell Windows this process belongs to the "YouTManager" app.
+    Toast notifications look up the icon from a shortcut with the same
+    AppUserModelID — install.ps1 stamps that on the Start Menu shortcut,
+    so packaged installs get the app icon on toasts. Dev-mode runs still
+    fall back to the default Python icon (no shortcut to point at)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("YouTManager")
+    except Exception:
+        pass
+
+
 def main() -> None:
+    _register_aumid()
     _ensure_ffmpeg()
 
     import webview

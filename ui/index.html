@@ -54,6 +54,7 @@
           Analytics
         </button>
         <div class="side-version"><span id="app-version">—</span> · yt-dlp <span id="ytdlp-version">—</span></div>
+        <button class="side-report" id="report-issue" type="button">Report an issue</button>
       </div>
     </div>
 
@@ -90,7 +91,10 @@
               <div class="info-thumb"><div class="ph">thumbnail 1280×720</div></div>
               <div class="info-grid" id="info-grid"></div>
             </div>
-            <div class="log-pane" id="pane-log" hidden></div>
+            <div class="log-pane" id="pane-log" hidden>
+              <button class="log-copy" id="log-copy" type="button" title="Copy full log to clipboard">Copy log</button>
+              <div class="log-lines" id="log-lines"></div>
+            </div>
             <div class="speed-pane" id="pane-speed" hidden>
               <div class="speed-head">
                 <span class="speed-num" id="speed-num">0 MB/s</span>
@@ -351,6 +355,39 @@
       <button class="btn-plain" id="dup-open" hidden>Open file</button>
       <button class="btn-plain" id="dup-show" hidden>Show in queue</button>
       <button class="btn-accent" id="dup-again">Download again</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ bulk duplicate prompt (playlist / multiple URLs) ============ -->
+<div class="modal-backdrop hidden" id="bdup-modal">
+  <div class="modal" style="width:520px" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:26px;height:26px;border-radius:6px;background:var(--warnS);display:flex;align-items:center;justify-content:center">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--warn)"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+        </div>
+        <span class="t">Some of these are duplicates</span>
+      </div>
+      <div class="title-spacer"></div>
+      <button class="modal-close" id="bdup-close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p id="bdup-message" style="font-size:13px;line-height:1.55;color:var(--tx2);margin-bottom:10px"></p>
+      <p style="font-size:12px;line-height:1.5;color:var(--tx3);margin:0">
+        Choose <b>Skip duplicates</b> to only queue the new ones, <b>Download all</b>
+        to queue everything (existing files stay as <code>Title.mp4</code>; extras
+        get saved as <code>Title (1).mp4</code>, <code>(2).mp4</code>, etc.), or
+        <b>Cancel</b> to change your selection.
+      </p>
+    </div>
+    <div class="modal-foot">
+      <div class="title-spacer"></div>
+      <button class="btn-quiet"  id="bdup-cancel">Cancel</button>
+      <button class="btn-plain"  id="bdup-force">Download all</button>
+      <button class="btn-accent" id="bdup-skip">Skip duplicates</button>
     </div>
   </div>
 </div>

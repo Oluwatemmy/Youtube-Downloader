@@ -218,6 +218,16 @@ body {
 .nav-btn svg { flex: none; }
 
 .side-version { padding: 7px 9px 2px; font: 400 10.5px/1.5 var(--mono); color: var(--tx3); }
+.side-report {
+  display: block; width: calc(100% - 18px);
+  margin: 2px 9px 6px;
+  padding: 0; border: 0; background: none;
+  text-align: left; cursor: pointer;
+  font: 500 11px/1.5 var(--sans);
+  color: var(--tx3);
+  transition: color 100ms ease-out;
+}
+.side-report:hover { color: var(--acc); text-decoration: underline; }
 
 /* ----- content area ------------------------------------------------- */
 
@@ -458,8 +468,20 @@ body.density-compact .tbl-row { height: 38px; }
 .log-pane {
   flex: 1; min-width: 0;
   padding: 10px 14px; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 3px;
+  position: relative;
 }
+.log-lines { display: flex; flex-direction: column; gap: 3px; }
+.log-copy {
+  position: sticky; top: 0; float: right;
+  margin-left: 8px; margin-bottom: 6px;
+  padding: 3px 10px; height: 24px;
+  border-radius: 5px; border: 1px solid var(--stroke);
+  background: var(--layer2); color: var(--tx2);
+  font: 500 11px/1 var(--sans); cursor: pointer;
+  transition: color 100ms, background 100ms, border-color 100ms;
+}
+.log-copy:hover { color: var(--tx); background: var(--layer3); border-color: var(--stroke2); }
+.log-copy.done  { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 60%, var(--stroke)); }
 .log-line {
   font: 400 11px/1.6 var(--mono);
   white-space: pre-wrap;
