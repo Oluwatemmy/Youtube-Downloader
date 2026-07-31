@@ -26,7 +26,7 @@
     <div class="tool-divider"></div>
     <div id="tool-buttons"><!-- populated by app.js --></div>
     <div class="title-spacer"></div>
-    <div class="search">
+    <div class="search" id="search-wrap">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>
       <input id="search" placeholder="Search downloads" autocomplete="off"/>
     </div>
@@ -174,9 +174,36 @@
             </svg>
           </div>
           <div class="hist-card">
-            <div class="hist-head">Recent activity</div>
+            <div class="hist-head">
+              <span>Download history</span>
+              <span id="hist-total" class="hist-total"></span>
+            </div>
+            <div class="hist-filters">
+              <label class="hist-date-lbl" style="flex:1;min-width:180px">Search
+                <input class="set-input" id="hist-search" placeholder="title, uploader, URL…" style="height:30px;width:100%"/>
+              </label>
+              <label class="hist-date-lbl">From
+                <input class="set-input mono" id="hist-from" type="date" style="height:30px"/>
+              </label>
+              <label class="hist-date-lbl">To
+                <input class="set-input mono" id="hist-to" type="date" style="height:30px"/>
+              </label>
+              <label class="hist-date-lbl">Status
+                <select class="set-select" id="hist-status" style="height:30px;width:110px">
+                  <option value="">All</option>
+                  <option value="Done">Done</option>
+                  <option value="Failed">Failed</option>
+                </select>
+              </label>
+              <button class="btn-quiet" id="hist-clear-filters" style="height:30px;align-self:flex-end">Reset</button>
+            </div>
             <div class="hist-cols"><span>Timestamp</span><span>Title</span><span>Status</span><span>Size</span></div>
             <div id="hist-rows"></div>
+            <div class="hist-pager">
+              <button class="btn-quiet" id="hist-prev" style="height:28px">‹ Prev</button>
+              <span id="hist-page-info" class="hist-page-info"></span>
+              <button class="btn-quiet" id="hist-next" style="height:28px">Next ›</button>
+            </div>
           </div>
         </div>
       </div>
@@ -274,6 +301,12 @@
             <input class="set-input mono flex1" id="dlg-folder" style="height:32px"/>
             <button class="set-btn" id="dlg-browse" style="height:32px">Browse…</button>
           </div>
+        </div>
+        <div class="field" style="margin-top: 10px" id="subs-field">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--tx);cursor:pointer">
+            <input type="checkbox" id="dlg-subs" style="margin:0"/>
+            <span>Also download subtitles (English + auto-generated if available)</span>
+          </label>
         </div>
       </div>
     </div>

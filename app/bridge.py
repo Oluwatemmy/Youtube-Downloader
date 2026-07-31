@@ -134,6 +134,93 @@ def _extract_video_id(url: str) -> str:
     return m.group(1) if m else ""
 
 
+_RATE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgKMG]?)\s*$")
+
+
+def _parse_ratelimit(s: Any) -> int:
+    """Parse a human-friendly speed limit string ("500K", "1.5M", "2G",
+    "1048576") into bytes/sec for yt-dlp's `ratelimit` option. Returns
+    0 for unlimited (empty / invalid / zero). Matches how curl/wget parse
+    these — K = 1024, M = 1024*1024, etc."""
+    if not s:
+        return 0
+    m = _RATE_RE.match(str(s))
+    if not m:
+        return 0
+    n = float(m.group(1))
+    unit = (m.group(2) or "").lower()
+    mult = {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}.get(unit, 1)
+    return int(n * mult)
+
+
+def _app_is_foreground() -> bool:
+    """True if our own process owns the foreground Windows window.
+    Used to suppress the batch-complete toast when the user is already
+    looking at the app — they can see the row turn Done, a toast on top
+    of that is just noise. Matches Discord / Slack / VS Code behaviour.
+    Silent False on non-Windows or if ctypes calls fail."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        pid = ctypes.c_ulong(0)
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value == os.getpid()
+    except Exception:
+        return False
+
+
+def _toast_icon_path() -> str:
+    """Absolute path to the app icon used by Windows toast notifications.
+    Falls back to empty string when the file isn't reachable — winotify
+    just shows the default app icon in that case."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).resolve().parent.parent
+    for name in ("icon.ico", "icon.png"):
+        p = base / "assets" / name
+        if p.exists():
+            return str(p.resolve())
+    return ""
+
+
+def _fire_batch_toast(done: int, failed: int) -> None:
+    """Windows toast notification when a batch of downloads finishes.
+    Silent no-op on non-Windows, if winotify isn't available, or when the
+    app is already in focus (the user doesn't need a toast on top of the
+    UI they're actively looking at)."""
+    if sys.platform != "win32":
+        return
+    if _app_is_foreground():
+        return
+    try:
+        from winotify import Notification
+    except ImportError:
+        return
+    total = done + failed
+    if total == 1:
+        title = "Download complete" if done else "Download failed"
+        msg = "1 file finished" if done else "1 file failed"
+    else:
+        title = "Downloads finished"
+        parts = []
+        if done:   parts.append(f"{done} complete")
+        if failed: parts.append(f"{failed} failed")
+        msg = " · ".join(parts) or f"{total} finished"
+    try:
+        icon = _toast_icon_path()
+        kwargs = {"app_id": "YouT Manager", "title": title, "msg": msg}
+        if icon:
+            kwargs["icon"] = icon
+        Notification(**kwargs).show()
+    except Exception:
+        traceback.print_exc()
+
+
 _JS_RUNTIME_CACHE: Optional[Dict[str, Any]] = None
 
 
@@ -209,6 +296,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "wizard_seen": False,         # first-run cookies wizard has been shown
     "mp3_bitrate": "192",         # default kbps for MP3 extraction (320/256/192/128/96)
     "ytdlp_last_check": "",       # ISO timestamp of last update check (auto-runs weekly)
+    "speed_limit": "",            # e.g. "500K" or "1M"; blank = unlimited
 }
 
 DEFAULT_ANALYTICS: Dict[str, Any] = {
@@ -291,6 +379,12 @@ class DownloadManager:
         self._futures: Dict[int, Future] = {}
         self._cancelled: set[int] = set()  # ids the user asked to stop
         self._last_emit: Dict[int, float] = {}  # id -> last emit ts, for throttling
+        # Batch-complete toast tracking. Flipped True on first Downloading
+        # status; when the queue fully settles (no Queued/Downloading/Paused
+        # items left) we fire a Windows toast and flip it back False.
+        self._batch_active: bool = False
+        self._batch_done_count: int = 0
+        self._batch_fail_count: int = 0
         # Per-item captured log lines from yt-dlp. Kept in memory only —
         # logs are ephemeral per session, not part of queue persistence.
         # Each entry is [text, tone] where tone is a css class name.
@@ -310,7 +404,7 @@ class DownloadManager:
     def add(self, url: str, format_id: Optional[str] = None,
             audio: bool = False, bitrate: str = "192",
             playlist_folder: str = "", container: str = "",
-            force: bool = False) -> int:
+            force: bool = False, subs: bool = False) -> int:
         url = url.strip()
         if not url:
             raise ValueError("empty url")
@@ -344,6 +438,8 @@ class DownloadManager:
             # The download step uses this to append " (1)", " (2)", ...
             # to the output filename instead of overwriting the earlier file.
             item["is_redownload"] = bool(force)
+            # Whether to also fetch subtitles for this item (English + auto).
+            item["subs"] = bool(subs)
             self._items.append(item)
         self._emit_queue()
         self._persist()
@@ -355,10 +451,10 @@ class DownloadManager:
     def add_batch(self, urls: List[str], format_id: Optional[str] = None,
                   audio: bool = False, bitrate: str = "192",
                   playlist_folder: str = "", container: str = "",
-                  force: bool = False) -> List[int]:
+                  force: bool = False, subs: bool = False) -> List[int]:
         return [self.add(u, format_id=format_id, audio=audio, bitrate=bitrate,
                          playlist_folder=playlist_folder, container=container,
-                         force=force)
+                         force=force, subs=subs)
                 for u in urls if u.strip()]
 
     def remove(self, id_: int) -> None:
@@ -665,6 +761,12 @@ class DownloadManager:
         if is_terminal or now - last >= 0.1:
             self._last_emit[id_] = now
             self._emit_progress(id_)
+        if status == "Downloading":
+            self._batch_active = True
+        if status == "Done":
+            self._batch_done_count += 1
+        elif status == "Failed":
+            self._batch_fail_count += 1
         if status in ("Done", "Failed"):
             # A download resolved — persist so restart doesn't lose it,
             # and let the bridge log it to history.
@@ -673,6 +775,26 @@ class DownloadManager:
                 self._on_finished(snap)
             except Exception:
                 traceback.print_exc()
+            self._maybe_batch_complete_toast()
+
+    def _maybe_batch_complete_toast(self) -> None:
+        """Fires a Windows toast when the last active download resolves.
+        A "batch" here is loosely anything the user kicked off during the
+        current session — no need to make them explicitly group items."""
+        if not self._batch_active:
+            return
+        with self._lock:
+            pending = any(i.get("status") in ("Queued", "Downloading", "Paused")
+                          for i in self._items)
+        if pending:
+            return
+        done, failed = self._batch_done_count, self._batch_fail_count
+        self._batch_active = False
+        self._batch_done_count = 0
+        self._batch_fail_count = 0
+        if done + failed == 0:
+            return
+        _fire_batch_toast(done, failed)
 
     def _emit_progress(self, id_: int) -> None:
         with self._lock:
@@ -1029,6 +1151,7 @@ class DownloadManager:
                 is_audio = bool(cur.get("audio_only"))
                 bitrate = str(cur.get("audio_bitrate") or "192")
                 container = (cur.get("container") or "").lower()
+                want_subs = bool(cur.get("subs"))
 
             extra_opts: Dict[str, Any] = {
                 "outtmpl": outtmpl,
@@ -1039,10 +1162,22 @@ class DownloadManager:
                 # (previously it showed a hardcoded fake trace).
                 "logger": _ItemLogger(self, id_),
                 "quiet": False, "no_warnings": False,
-                "writesubtitles": bool(self._settings.get("desc")),
                 "continuedl": not fresh,
                 "overwrites": fresh,
             }
+            # Per-item subtitle download (checkbox in Add URL). English +
+            # auto-generated so it works on videos without a proper caption
+            # track; format is vtt because it's the most player-friendly.
+            if want_subs and not is_audio:
+                extra_opts["writesubtitles"]      = True
+                extra_opts["writeautomaticsub"]   = True
+                extra_opts["subtitleslangs"]      = ["en", "en.*"]
+                extra_opts["subtitlesformat"]     = "vtt"
+            # Global speed limit — parsed from a human-friendly Settings
+            # string like "500K" or "1M" (yt-dlp wants bytes/sec as int).
+            rl = _parse_ratelimit(self._settings.get("speed_limit"))
+            if rl:
+                extra_opts["ratelimit"] = rl
             if is_audio:
                 extra_opts["format"] = "bestaudio/best"
                 extra_opts["postprocessors"] = [{
@@ -1323,23 +1458,39 @@ class PyBridge:
 
     def check_duplicate(self, url: str) -> Dict[str, Any]:
         """Called from the Add URL dialog before submitting. Tells the UI
-        if this URL matches something already in the queue OR in history,
-        so it can prompt the user with Open / Show / Add-anyway options
-        instead of silently skipping or re-downloading."""
+        if this URL matches anything already in the queue OR history, so
+        it can prompt with Open / Show / Add-anyway options instead of
+        silently skipping or overwriting.
+
+        Returns the MOST RECENT match (highest queue id, or latest history
+        row) along with a `count` of all copies — so someone with four
+        `.mp4 / (1) / (2) / (3)` versions sees "you have 4 copies, latest
+        is `(3).mp4`" rather than the details of the oldest one."""
         vid = _extract_video_id(url or "")
-        # Live queue: match by video id (canonical) or exact URL.
+
+        # Live queue matches — collect all, then pick highest id.
+        queue_hits: List[Dict[str, Any]] = []
         for it in self._mgr.all():
             it_vid = _extract_video_id(it.get("url", ""))
             if (vid and it_vid and vid == it_vid) or it.get("url") == url:
-                return {
-                    "where": "queue",
-                    "id":      it.get("id"),
-                    "title":   it.get("title") or "?",
-                    "status":  it.get("status"),
-                    "size":    it.get("size"),
-                    "quality": it.get("quality"),
-                    "url":     it.get("url"),
-                }
+                queue_hits.append(it)
+        if queue_hits:
+            latest = max(queue_hits, key=lambda i: int(i.get("id", 0)))
+            return {
+                "where":   "queue",
+                "id":      latest.get("id"),
+                "title":   latest.get("title") or "?",
+                # file is the actual on-disk name (may include "(1)"
+                # from a prior re-download); shown in the prompt so
+                # users can tell which duplicate copy is which.
+                "file":    latest.get("file") or "",
+                "status":  latest.get("status"),
+                "size":    latest.get("size"),
+                "quality": latest.get("quality"),
+                "url":     latest.get("url"),
+                "count":   len(queue_hits),
+            }
+
         # History: match by video id only (URLs stored may vary). Skip
         # entries whose file is no longer on disk — the user obviously
         # deleted it and wants to re-download; prompting would just be
@@ -1347,6 +1498,7 @@ class PyBridge:
         # a "duplicate" of anything.
         if vid:
             dl_folder = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+            hist_hits: List[Dict[str, Any]] = []
             for h in self._history:
                 if _extract_video_id(h.get("url", "")) != vid:
                     continue
@@ -1354,14 +1506,20 @@ class PyBridge:
                     continue
                 if not self._downloaded_file_exists(h, dl_folder):
                     continue
+                hist_hits.append(h)
+            if hist_hits:
+                # History is chronological (append-only), so last = most recent.
+                latest_h = hist_hits[-1]
                 return {
                     "where":   "history",
-                    "title":   h.get("title") or "?",
-                    "status":  h.get("status"),
-                    "size":    h.get("size"),
-                    "quality": h.get("quality"),
-                    "date":    h.get("date"),
-                    "url":     h.get("url"),
+                    "title":   latest_h.get("title") or "?",
+                    "file":    Path(latest_h["output_path"]).name if latest_h.get("output_path") else "",
+                    "status":  latest_h.get("status"),
+                    "size":    latest_h.get("size"),
+                    "quality": latest_h.get("quality"),
+                    "date":    latest_h.get("date"),
+                    "url":     latest_h.get("url"),
+                    "count":   len(hist_hits),
                 }
         return {}
 
@@ -1400,6 +1558,7 @@ class PyBridge:
             playlist_folder=options.get("playlist_folder") or "",
             container=options.get("container") or "",
             force=bool(options.get("force")),
+            subs=bool(options.get("subs")),
         )
         return {"id": id_}
 
@@ -1413,6 +1572,7 @@ class PyBridge:
             playlist_folder=options.get("playlist_folder") or "",
             container=options.get("container") or "",
             force=bool(options.get("force")),
+            subs=bool(options.get("subs")),
         )}
 
     def get_playlist_entries(self, url: str) -> Dict[str, Any]:
@@ -1770,6 +1930,78 @@ class PyBridge:
             for h in history[-8:][::-1]
         ]
         return {"stats": stats, "perDay": per_day, "history": display_hist}
+
+    def get_history_page(self, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Paginated + filtered slice of history. Powers the searchable
+        history table in Analytics. Filters:
+          q     -- case-insensitive match against title / url / uploader
+          from  -- ISO date "YYYY-MM-DD", inclusive lower bound
+          to    -- ISO date "YYYY-MM-DD", inclusive upper bound
+          status -- "Done" / "Failed" / "" for all
+          page      -- 1-based
+          page_size -- default 15
+        """
+        options = options or {}
+        q         = (options.get("q") or "").strip().lower()
+        dfrom     = (options.get("from") or "").strip()
+        dto       = (options.get("to") or "").strip()
+        status_f  = (options.get("status") or "").strip()
+        page      = max(1, int(options.get("page") or 1))
+        page_size = max(1, min(200, int(options.get("page_size") or 15)))
+
+        # Filter first, then reverse-chronological, then paginate.
+        rows = []
+        for h in self._history:
+            if status_f and h.get("status") != status_f:
+                continue
+            d = h.get("date") or ""
+            if dfrom and d < dfrom: continue
+            if dto   and d > dto:   continue
+            if q:
+                hay = " ".join([
+                    str(h.get("title") or ""),
+                    str(h.get("url") or ""),
+                    str(h.get("uploader") or ""),
+                ]).lower()
+                if q not in hay: continue
+            rows.append(h)
+        # Newest first for the UI.
+        rows.reverse()
+        total = len(rows)
+        start = (page - 1) * page_size
+        end   = start + page_size
+
+        def _display_title(h: Dict[str, Any]) -> str:
+            """Prefer the actual on-disk filename stem so re-downloaded
+            copies show as `Title (1)`, `Title (2)` etc. instead of every
+            row displaying the identical bare title. Falls back to the
+            plain title for old history entries that predate `output_path`."""
+            out = h.get("output_path") or ""
+            if out:
+                stem = Path(out).stem
+                if stem:
+                    return stem
+            return h.get("title") or ""
+
+        page_rows = [
+            {
+                "date":   h.get("date", ""),
+                "time":   h.get("time", ""),
+                "title":  _display_title(h),
+                "url":    h.get("url", ""),
+                "status": h.get("status", ""),
+                "size":   h.get("size", "—"),
+                "quality": h.get("quality", ""),
+            }
+            for h in rows[start:end]
+        ]
+        return {
+            "rows":      page_rows,
+            "total":     total,
+            "page":      page,
+            "page_size": page_size,
+            "pages":     max(1, (total + page_size - 1) // page_size),
+        }
 
     def clear_history(self) -> bool:
         self._history = []
