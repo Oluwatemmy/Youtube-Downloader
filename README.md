@@ -28,6 +28,37 @@ a YouTube link, focus the app, and it already knows the URL from your
 clipboard. Click Download, and the file lands in your downloads folder ready
 to play in VLC / Movies & TV / whatever, or drag into a video editor.
 
+## Who this is for
+
+If you download YouTube videos more than "once in a while" and any of these
+sound familiar, this is built for you:
+
+- You want to **watch videos offline** on flights, on the road, or while your
+  internet is being weird
+- You **edit clips** out of YouTube content (for personal projects, memes,
+  reactions, study notes) and need the raw file, not a screen recording
+- You **rip audio** from music videos, podcasts, lectures, or interviews to
+  listen on the go
+- You save **lectures / tutorials / how-to videos** for reference — Python
+  full courses, cooking playlists, DIY channels
+- You back up **your own uploads** or channel content you want to keep even
+  if the creator deletes it
+- You just prefer **your own player** (VLC, MPC, PotPlayer) over YouTube's
+  chrome — better volume control, playback speed, hotkeys, no ads
+
+**What it's not:** it's not for hosting a redistribution site, not for
+mass-scraping channels for a dataset, and not for downloading paid content
+you don't own. Use it in line with YouTube's terms and the creator's rights.
+
+### Privacy
+
+**Everything stays on your machine.** No signups, no accounts on our end,
+no telemetry, no phone-home. The app talks to two servers: YouTube
+(to fetch the videos you asked for) and PyPI (only when you click Check
+for updates on yt-dlp). Your queue, history, cookies, and downloaded
+files live in `%APPDATA%\YouTubeDownloader\` and your chosen download
+folder — nobody else can see any of it unless you copy it out yourself.
+
 ## What it does
 
 - **Real per-video format list** — after you paste a URL the Quality dropdown
@@ -319,15 +350,83 @@ Rough order of what's next:
   on YouTube" class of videos that need a full authenticated web client.
   Currently not shipped because it adds ~250 MB of Node runtime.
 
+## Reporting bugs
+
+The **Report an issue** link in the sidebar footer (and in Settings →
+Advanced) opens the GitHub issues page in your browser. When you file
+one, the more of this you can include, the faster it gets fixed:
+
+1. **What you did** — the URL you pasted, the quality you picked, whether
+   subtitles were on, whether cookies were set, etc.
+2. **What you expected** vs **what happened**
+3. **The per-video log** — click the affected row → **Log** tab → **Copy
+   log** button (top-right of the pane) → paste into the issue. This is
+   yt-dlp's own output for THAT specific download and usually tells us
+   exactly what YouTube returned.
+4. **Screenshots** if the UI is wrong (progress stuck, filename off, etc.)
+5. **Your yt-dlp version** — shown at the bottom of the sidebar
+   (e.g. `v1.0.0 · yt-dlp 2026.07.04`)
+
+Please **redact any personal info** from cookies files before attaching
+them. Better: describe whether cookies were set, don't upload them.
+
+## Contributing
+
+Contributions are welcome — this is a small hobby project and any polish
+is appreciated. Rough guidelines:
+
+- **Bugs first, features second.** If you see something broken (in the UI
+  or a specific YouTube behaviour), a fix PR is very welcome.
+- **Talk before big changes.** For anything larger than a bug fix — new
+  tabs, new panels, restructuring — open an issue first so we can align
+  on the approach before you spend hours on it.
+- **Match the existing style.** Python code is fairly conventional; JS
+  uses vanilla DOM (no frameworks); PowerShell scripts stay `-NoProfile`
+  and use the `trap` pattern for visible errors. CSS uses design tokens
+  from `styles.css` — don't hardcode colours.
+- **Test in dev mode** — `venv\Scripts\python launcher.py` runs against
+  live source. If your change affects the packaged exe (PyInstaller spec,
+  install scripts), test with a fresh build via `scripts\build.ps1`.
+- **Keep the installer small.** The current ~27 MB is a feature; be
+  cautious about adding heavy dependencies. If you want to add PO token
+  support / bgutil / Node bundling / etc., open an issue first — the
+  size trade-off was intentional.
+- **Update the README** — add your feature to the "What it does" list
+  (or move an item from "Roadmap") and credit yourself in the Credits.
+
+Fork → branch → commit → PR. No CLA, no lawyers, just be nice.
+
+### Ideas for contributors
+
+Small pickings (~half day each):
+- Subtitle language picker: remember the last-used language as the default
+- Playlist picker: bulk-invert selection (currently only "Select all" /
+  "Clear")
+- Analytics: bar chart of downloads per hour-of-day
+- Right-click "Copy shareable URL" that omits the noisy tracking params
+
+Bigger ones (weekend project):
+- Any item from the Roadmap above
+- macOS / Linux support (currently Windows-only for the packaged install;
+  the app itself runs on any pywebview-supported platform)
+- Auto-updater for the app itself (not just yt-dlp) — check GitHub
+  releases, download new zip, install in place
+
 ## Credits
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) — does the actual heavy lifting
 - [pywebview](https://pywebview.flowrl.com/) — Python + native WebView2
+- [QuickJS-NG](https://github.com/quickjs-ng/quickjs) — bundled JavaScript
+  runtime used to decrypt YouTube's `nsig` signature
 - [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) — static
   Windows FFmpeg used by the auto-installer
 - [truststore](https://truststore.readthedocs.io/) — makes Python's ssl use
   the Windows cert store, without which antivirus HTTPS scanning breaks
   every request
+- [winotify](https://pypi.org/project/winotify/) — Windows toast
+  notifications for finished downloads
+- [Ajayi Oluwaseyi Temitope](https://github.com/Oluwatemmy) — author,
+  design, and the whole application layer
 - [@reissbruno](https://github.com/reissbruno) — proposed MP3 extraction in
   [PR #5](https://github.com/Oluwatemmy/Youtube-Downloader/pull/5); the
   current dialog toggle borrows the "format as top-level choice" idea
