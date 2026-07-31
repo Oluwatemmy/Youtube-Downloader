@@ -42,6 +42,11 @@ from typing import Any, Callable, Dict, List, Optional
 import yt_dlp
 
 
+# Displayed in the sidebar and available to JS via `api.app_version()`.
+# Bump per release. Keep in sync with the `-Version` arg to build.ps1.
+APP_VERSION = "v2.0.0"
+
+
 # ---------------------------------------------------------------
 # paths
 # ---------------------------------------------------------------
@@ -102,6 +107,73 @@ def _sanitize_folder_name(name: str) -> str:
     length so path-limit issues stay unlikely for the files inside."""
     cleaned = _FOLDER_INVALID.sub("-", name or "").strip(". ")[:150]
     return cleaned or "Playlist"
+
+
+# ---- URL / video id normalization ---------------------------------
+
+# All the URL shapes YouTube serves that resolve to the same video.
+# The important part is capturing the video id so we can dedupe across
+# different-looking URLs like:
+#   youtube.com/watch?v=ABC  |  youtu.be/ABC  |  youtube.com/shorts/ABC
+#   youtube.com/watch?v=ABC&list=X&t=30s      (same video, playlist/timestamp trimmed)
+_VIDEO_ID_RE = re.compile(
+    r"""(?:
+        youtu\.be/                        |
+        youtube\.com/watch\?[^\s]*[?&]v=  |
+        youtube\.com/watch\?v=            |
+        youtube\.com/(?:shorts|live|embed)/
+    )([\w-]{6,})""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+def _extract_video_id(url: str) -> str:
+    """Return YouTube's 11-ish-char video id if `url` is a single-video
+    link, otherwise empty string (playlists, channel pages, etc.).
+    Used to detect duplicates across cosmetically-different URLs."""
+    m = _VIDEO_ID_RE.search(url or "")
+    return m.group(1) if m else ""
+
+
+_JS_RUNTIME_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _app_root_for_bin() -> Path:
+    """Where to look for bundled helper binaries (bin/qjs.exe, etc.).
+    When frozen this is the folder next to YouTManager.exe; in dev mode
+    it's the repo root two levels up from this file (app/bridge.py)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent
+
+
+def _detect_js_runtime() -> Dict[str, Any]:
+    """Return a `js_runtimes` dict yt-dlp can use to deobfuscate YouTube's
+    `nsig` signature — without it many videos only expose tiny storyboard
+    formats and fail with "Requested format is not available". Cached
+    across calls so we don't shell out for every metadata fetch.
+
+    Order: bundled `bin/qjs.exe` first (ships with the app so users don't
+    need to install anything), then PATH-discovered deno/bun/node/qjs.
+    Returns `{}` if none are found — yt-dlp then falls back to its
+    deprecated no-runtime path.
+    """
+    global _JS_RUNTIME_CACHE
+    if _JS_RUNTIME_CACHE is not None:
+        return _JS_RUNTIME_CACHE
+    import shutil
+    found: Dict[str, Any] = {}
+    bundled = _app_root_for_bin() / "bin" / ("qjs.exe" if sys.platform == "win32" else "qjs")
+    if bundled.exists():
+        found["quickjs"] = {"path": str(bundled)}
+    else:
+        for name in ("deno", "bun", "node", "qjs"):
+            path = shutil.which(name)
+            if path:
+                key = "quickjs" if name == "qjs" else name
+                found[key] = {"path": path}
+                break
+    _JS_RUNTIME_CACHE = found
+    return found
 
 
 def _fmt_eta(seconds: Optional[float]) -> str:
@@ -237,13 +309,23 @@ class DownloadManager:
 
     def add(self, url: str, format_id: Optional[str] = None,
             audio: bool = False, bitrate: str = "192",
-            playlist_folder: str = "", container: str = "") -> int:
+            playlist_folder: str = "", container: str = "",
+            force: bool = False) -> int:
         url = url.strip()
         if not url:
             raise ValueError("empty url")
         with self._lock:
-            if self._settings.get("dupes") and any(i["url"] == url for i in self._items):
-                return -1
+            # Dedupe by canonical video id so ?t=30s / youtu.be / &list=X
+            # variants of the same video don't queue twice. `force=True`
+            # bypasses the check (user explicitly picked "Download anyway"
+            # in the UI's duplicate prompt).
+            if self._settings.get("dupes") and not force:
+                vid = _extract_video_id(url)
+                for i in self._items:
+                    same_url = i["url"] == url
+                    same_vid = vid and _extract_video_id(i["url"]) == vid
+                    if same_url or same_vid:
+                        return -1
             item = self._new_item(url)
             # Audio mode overrides any video format_id — we always want
             # bestaudio and let FFmpegExtractAudio postprocess to MP3.
@@ -258,6 +340,10 @@ class DownloadManager:
             # matches the label the user picked, instead of defaulting to
             # mkv/webm when video and audio streams have mixed containers.
             item["container"] = (container or "").lower()
+            # Marks a re-download of an already-in-queue/history video.
+            # The download step uses this to append " (1)", " (2)", ...
+            # to the output filename instead of overwriting the earlier file.
+            item["is_redownload"] = bool(force)
             self._items.append(item)
         self._emit_queue()
         self._persist()
@@ -268,9 +354,11 @@ class DownloadManager:
 
     def add_batch(self, urls: List[str], format_id: Optional[str] = None,
                   audio: bool = False, bitrate: str = "192",
-                  playlist_folder: str = "", container: str = "") -> List[int]:
+                  playlist_folder: str = "", container: str = "",
+                  force: bool = False) -> List[int]:
         return [self.add(u, format_id=format_id, audio=audio, bitrate=bitrate,
-                         playlist_folder=playlist_folder, container=container)
+                         playlist_folder=playlist_folder, container=container,
+                         force=force)
                 for u in urls if u.strip()]
 
     def remove(self, id_: int) -> None:
@@ -289,31 +377,41 @@ class DownloadManager:
         self._cancelled.add(id_)
 
         if captured:
-            # Delete the completed output file if the download finished.
             out = captured.get("output_path")
-            if out:
+            if out and Path(out).exists():
+                # Completed download: delete THIS row's exact file plus its
+                # own partial siblings only. A title-glob would also match
+                # a sibling "Title (1).mp4" from a re-downloaded duplicate
+                # and wipe it — not what the user asked for.
+                target = Path(out)
                 try:
-                    Path(out).unlink()
+                    target.unlink()
                 except OSError:
                     pass
-            # Delete any partials from an incomplete / interrupted download.
-            title = (captured.get("title") or "").strip()
-            if title:
-                base_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
-                sub = captured.get("playlist_folder") or ""
-                download_dir = base_dir / sub if sub else base_dir
-                stem = title.replace(":", "-").replace("/", "-").replace("?", "")[:120]
-                for pattern in (f"{stem}*.part*", f"{stem}*.ytdl", f"{stem}.*"):
-                    for p in download_dir.glob(pattern):
-                        # Guard against deleting an unrelated file that only
-                        # shares the stem — only delete files clearly derived
-                        # from this download.
-                        if p.suffix.lower() in (".mp4", ".mkv", ".webm", ".m4a",
-                                                ".mp3", ".part", ".ytdl", ".description"):
-                            try:
-                                p.unlink()
-                            except OSError:
-                                pass
+                for p in target.parent.glob(f"{target.stem}*"):
+                    if p.suffix.lower() in (".part", ".ytdl", ".description"):
+                        try:
+                            p.unlink()
+                        except OSError:
+                            pass
+            else:
+                # Never completed (Queued / Paused / Failed): fall back to
+                # a title-based glob to sweep leftover partials. Skips
+                # finished-file extensions to avoid clobbering an in-flight
+                # duplicate row's actual file.
+                title = (captured.get("title") or "").strip()
+                if title:
+                    base_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+                    sub = captured.get("playlist_folder") or ""
+                    download_dir = base_dir / sub if sub else base_dir
+                    stem = title.replace(":", "-").replace("/", "-").replace("?", "")[:120]
+                    for pattern in (f"{stem}*.part*", f"{stem}*.ytdl"):
+                        for p in download_dir.glob(pattern):
+                            if p.suffix.lower() in (".part", ".ytdl"):
+                                try:
+                                    p.unlink()
+                                except OSError:
+                                    pass
 
         self._emit_queue()
         self._persist()
@@ -589,11 +687,12 @@ class DownloadManager:
 
     # ---- yt-dlp bridge ----
 
-    # Player-client fallback chain. tv_embedded is preferred because it
-    # surfaces the full 144p–2160p ladder including video-only streams;
-    # android is the last resort because it bypasses YouTube's bot check
-    # but only returns up to 360p. See the diagnostics from 2026-07-29.
-    _CLIENT_CHAIN = (["tv_embedded"], ["android"])
+    # Player-client fallback chain. `None` means "let yt-dlp pick" — as of
+    # 2026-07-31 that auto-selects visionos + android_vr, which surface the
+    # full 144p–2160p ladder without needing a JS runtime. tv_embedded and
+    # android are kept as fallbacks in case the defaults ever stop working
+    # against YouTube's bot check.
+    _CLIENT_CHAIN = (None, ["tv_embedded"], ["android"])
 
     def _ydl_opts(self, extra: Optional[Dict[str, Any]] = None,
                   player_client: Optional[List[str]] = None,
@@ -619,10 +718,18 @@ class DownloadManager:
             # Chunked HTTP downloads (10 MB) — friendlier to CDN edge nodes
             # and less likely to hit range-request weirdness on large files.
             "http_chunk_size": 10 * 1024 * 1024,
-            "extractor_args": {
-                "youtube": {"player_client": player_client or self._CLIENT_CHAIN[0]},
-            },
         }
+        # yt-dlp needs a JS runtime to decrypt YouTube's nsig — without it
+        # many videos only return storyboard formats and error out with
+        # "Requested format is not available". Auto-detect node/deno/bun/qjs.
+        js_rt = _detect_js_runtime()
+        if js_rt:
+            opts["js_runtimes"] = js_rt
+        # Only pin a player_client when the caller explicitly asks for one.
+        # Leaving it unset lets yt-dlp auto-pick working clients, which is
+        # what we want for the first attempt in the fallback chain.
+        if player_client:
+            opts["extractor_args"] = {"youtube": {"player_client": player_client}}
         if use_cookies:
             # Prefer a static cookies.txt over browser cookies — it doesn't
             # need the browser closed and it's what we tell the user to
@@ -725,8 +832,7 @@ class DownloadManager:
             info = None
             chosen_client: Optional[List[str]] = None
             chosen_use_cookies = True
-            cookies_configured = bool(self._settings.get("cookies_browser") and
-                                      self._settings["cookies_browser"] != "none")
+            cookies_configured = self._has_cookies()
             last_meta_exc: Optional[Exception] = None
             for client in self._CLIENT_CHAIN:
                 cookie_modes = [True, False] if cookies_configured else [False]
@@ -797,12 +903,29 @@ class DownloadManager:
             # --- download ---
             base_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
             with self._lock:
-                subfolder = (self._find(id_) or {}).get("playlist_folder") or ""
+                it_snap2 = self._find(id_) or {}
+                subfolder = it_snap2.get("playlist_folder") or ""
+                is_redownload = bool(it_snap2.get("is_redownload"))
             # Playlist items get their own subfolder so they don't scatter
             # across the root download folder alongside standalone videos.
             download_dir = base_dir / subfolder if subfolder else base_dir
             download_dir.mkdir(parents=True, exist_ok=True)
             outtmpl = str(download_dir / "%(title)s.%(ext)s")
+
+            # Force-redownload: if a file with this title is already on disk,
+            # bump the filename to "<title> (1).<ext>" (or (2), (3)...) so
+            # the user ends up with both copies instead of the new one
+            # silently overwriting the old.
+            if is_redownload and info:
+                base_title = (info.get("title") or "").strip()
+                if base_title:
+                    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base_title).strip().rstrip(".")
+                    # Any existing file with that stem, regardless of extension.
+                    if any(download_dir.glob(f"{safe}.*")):
+                        n = 1
+                        while any(download_dir.glob(f"{safe} ({n}).*")):
+                            n += 1
+                        outtmpl = str(download_dir / f"%(title)s ({n}).%(ext)s")
 
             # Fresh runs sweep leftover .part / .ytdl files so yt-dlp's
             # resume logic can't try to continue from a stale byte offset
@@ -858,8 +981,12 @@ class DownloadManager:
                     # merging (video+audio) or postprocessing (MP3
                     # extraction), pp_hook below will overwrite it with
                     # the real output.
-                    self._update(id_, pct=100, speed="—", eta="—",
-                                 output_path=d.get("filename"))
+                    final_name = d.get("filename")
+                    updates = {"pct": 100, "speed": "—", "eta": "—",
+                               "output_path": final_name}
+                    if final_name:
+                        updates["file"] = Path(final_name).name
+                    self._update(id_, **updates)
 
             def pp_hook(d: Dict[str, Any]) -> None:
                 """Fires after each postprocessor step. The last one that
@@ -876,7 +1003,14 @@ class DownloadManager:
                          or info.get("filename"))
                 if not final:
                     return
-                updates: Dict[str, Any] = {"output_path": final}
+                # Sync the display filename to what actually landed on
+                # disk — otherwise "Download again" writes to "Title (1).mp4"
+                # but the row still says "Title.mp4", and a later Delete
+                # would target the wrong file.
+                updates: Dict[str, Any] = {
+                    "output_path": final,
+                    "file":        Path(final).name,
+                }
                 try:
                     real_bytes = Path(final).stat().st_size
                     updates["size"] = _fmt_bytes(real_bytes)
@@ -1149,6 +1283,9 @@ class PyBridge:
             "size":     item.get("size", "—"),
             "mb":       int(item.get("mb", 0) or 0),
             "quality":  item.get("quality", "—"),
+            # Path on disk so check_duplicate can skip the "you've seen
+            # this before" prompt after the user deletes the file.
+            "output_path": item.get("output_path"),
         }
         url = entry["url"]
         if entry["status"] == "Done" and url:
@@ -1184,6 +1321,75 @@ class PyBridge:
     def get_queue(self) -> List[Dict[str, Any]]:
         return self._mgr.all()
 
+    def check_duplicate(self, url: str) -> Dict[str, Any]:
+        """Called from the Add URL dialog before submitting. Tells the UI
+        if this URL matches something already in the queue OR in history,
+        so it can prompt the user with Open / Show / Add-anyway options
+        instead of silently skipping or re-downloading."""
+        vid = _extract_video_id(url or "")
+        # Live queue: match by video id (canonical) or exact URL.
+        for it in self._mgr.all():
+            it_vid = _extract_video_id(it.get("url", ""))
+            if (vid and it_vid and vid == it_vid) or it.get("url") == url:
+                return {
+                    "where": "queue",
+                    "id":      it.get("id"),
+                    "title":   it.get("title") or "?",
+                    "status":  it.get("status"),
+                    "size":    it.get("size"),
+                    "quality": it.get("quality"),
+                    "url":     it.get("url"),
+                }
+        # History: match by video id only (URLs stored may vary). Skip
+        # entries whose file is no longer on disk — the user obviously
+        # deleted it and wants to re-download; prompting would just be
+        # noise. Also skip Failed entries, since a failed attempt isn't
+        # a "duplicate" of anything.
+        if vid:
+            dl_folder = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
+            for h in self._history:
+                if _extract_video_id(h.get("url", "")) != vid:
+                    continue
+                if (h.get("status") or "").lower() != "done":
+                    continue
+                if not self._downloaded_file_exists(h, dl_folder):
+                    continue
+                return {
+                    "where":   "history",
+                    "title":   h.get("title") or "?",
+                    "status":  h.get("status"),
+                    "size":    h.get("size"),
+                    "quality": h.get("quality"),
+                    "date":    h.get("date"),
+                    "url":     h.get("url"),
+                }
+        return {}
+
+    @staticmethod
+    def _downloaded_file_exists(hist_entry: Dict[str, Any], dl_folder: Path) -> bool:
+        """True if this history entry's downloaded file is still on disk.
+        Prefers the stored `output_path`; falls back to scanning `dl_folder`
+        (and its immediate subfolders — playlists live one level deep) for
+        a file whose stem matches the sanitized title. Older history rows
+        predate the `output_path` field, so the scan keeps them working."""
+        path = hist_entry.get("output_path")
+        if path and Path(path).exists():
+            return True
+        title = (hist_entry.get("title") or "").strip()
+        if not title or not dl_folder.exists():
+            return False
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip().rstrip(".")
+        if not safe:
+            return False
+        # Search root + one level of subfolders (playlist folders).
+        for parent in (dl_folder, *[p for p in dl_folder.iterdir() if p.is_dir()]):
+            try:
+                if any(parent.glob(f"{safe}.*")) or any(parent.glob(f"{safe} (*).*")):
+                    return True
+            except OSError:
+                continue
+        return False
+
     def add_url(self, url: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         options = options or {}
         id_ = self._mgr.add(
@@ -1193,6 +1399,7 @@ class PyBridge:
             bitrate=options.get("bitrate") or self._settings.get("mp3_bitrate", "192"),
             playlist_folder=options.get("playlist_folder") or "",
             container=options.get("container") or "",
+            force=bool(options.get("force")),
         )
         return {"id": id_}
 
@@ -1205,6 +1412,7 @@ class PyBridge:
             bitrate=options.get("bitrate") or self._settings.get("mp3_bitrate", "192"),
             playlist_folder=options.get("playlist_folder") or "",
             container=options.get("container") or "",
+            force=bool(options.get("force")),
         )}
 
     def get_playlist_entries(self, url: str) -> Dict[str, Any]:
@@ -1290,13 +1498,20 @@ class PyBridge:
             }
 
         formats = (info or {}).get("formats") or []
+
+        def _known_bytes(f: Dict[str, Any]) -> int:
+            """Only return a size when yt-dlp actually reports one. A
+            tbr*duration estimate looked tempting but overshoots badly on
+            VBR MP4 (peak vs average bitrate) — showing 589 MB for a file
+            that lands at 176 MB is worse than showing nothing, because
+            users abort the download thinking it's too big."""
+            return int(f.get("filesize") or f.get("filesize_approx") or 0)
+
         # Best audio track (used both as a standalone option and as the
         # audio companion for muxing video-only streams).
         audio_only = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")]
         best_audio = max(audio_only, key=lambda f: f.get("abr") or 0, default=None)
-        audio_size = 0
-        if best_audio:
-            audio_size = best_audio.get("filesize") or best_audio.get("filesize_approx") or 0
+        audio_size = _known_bytes(best_audio) if best_audio else 0
 
         # Any format that has video: progressive (has audio too) or
         # adaptive video-only (we'll mux).
@@ -1320,15 +1535,18 @@ class PyBridge:
                         key=lambda x: (-(x.get("height") or 0), x.get("ext") or "")):
             h = f["height"]
             ext = (f.get("ext") or "mp4").lower()
-            vs = f.get("filesize") or f.get("filesize_approx") or 0
+            vs = _known_bytes(f)
             needs_mux = f.get("acodec") in (None, "none")
-            total = vs + (audio_size if needs_mux else 0)
+            # Only quote a total when we know the video part's real size.
+            # If vs is 0 (nsig-protected MP4 with no reported filesize),
+            # leave size blank rather than mislead.
+            total = (vs + audio_size) if (vs and needs_mux) else vs
             out.append({
                 "format_id": f["format_id"] + ("+bestaudio" if needs_mux else ""),
                 "label": f"{h}p {ext.upper()}",
                 "height": h,
                 "size_mb": int(total / 1_048_576) if total else None,
-                "size_str": _fmt_bytes(total) if total else "~ unknown",
+                "size_str": _fmt_bytes(total) if total else "—",
                 # Target container — tells the download to remux into this
                 # extension so the output file matches the label the user saw.
                 "container": ext,
@@ -1341,7 +1559,7 @@ class PyBridge:
                 "label": f"Audio only ({audio_ext})",
                 "height": 0,
                 "size_mb": int(audio_size / 1_048_576) if audio_size else None,
-                "size_str": _fmt_bytes(audio_size) if audio_size else "~ unknown",
+                "size_str": _fmt_bytes(audio_size) if audio_size else "—",
                 "container": audio_ext,
             })
 
@@ -1349,7 +1567,18 @@ class PyBridge:
         low_quality_only = top_height and top_height <= 360
         meta = info.get("_extraction_meta", {}) if info else {}
         note: Optional[str] = None
-        if low_quality_only:
+        if low_quality_only and not _detect_js_runtime():
+            # Most common cause of "only low-res available" as of 2026 is a
+            # missing JS runtime — YouTube's nsig deobfuscation needs one.
+            # The app ships QuickJS in bin/, so this only fires if it's been
+            # deleted or blocked (e.g. antivirus quarantined qjs.exe).
+            note = (
+                "Only low-quality formats are available because no JavaScript "
+                "runtime is installed. The app ships QuickJS in its `bin/` "
+                "folder — check that `qjs.exe` is still there and not blocked "
+                "by antivirus, or install Node.js from nodejs.org."
+            )
+        elif low_quality_only:
             browser = self._mgr._settings.get("cookies_browser", "none")
             has_cookies_file = bool((self._mgr._settings.get("cookies_file") or "").strip())
             if meta.get("cookies_locked") and not has_cookies_file:
@@ -1371,13 +1600,18 @@ class PyBridge:
                     "Settings → Advanced to unlock full quality."
                 )
 
+        # Format view count with thousands separator; the UI shows this
+        # in the info card next to duration.
+        views = info.get("view_count") if info else None
         return {
             "playlist": False,
-            "title": info.get("title") if info else url,
-            "uploader": info.get("uploader") if info else None,
-            "duration": _fmt_duration(info.get("duration") if info else None),
-            "formats": out,
-            "note": note,
+            "title":     info.get("title") if info else url,
+            "uploader":  info.get("uploader") if info else None,
+            "duration":  _fmt_duration(info.get("duration") if info else None),
+            "thumbnail": self._mgr._pick_thumbnail(info) if info else "",
+            "views":     f"{int(views):,}" if isinstance(views, (int, float)) else None,
+            "formats":   out,
+            "note":      note,
         }
 
     def remove(self, id_: int) -> bool:
@@ -1566,6 +1800,9 @@ class PyBridge:
 
     # --- misc ---
 
+    def app_version(self) -> str:
+        return APP_VERSION
+
     def ytdlp_version(self) -> str:
         try:
             return yt_dlp.version.__version__
@@ -1574,7 +1811,12 @@ class PyBridge:
 
     def ytdlp_check_update(self) -> Dict[str, Any]:
         """Query PyPI for the latest yt-dlp release. Only checks — doesn't
-        download anything. Returns current + latest + a boolean flag."""
+        download anything. Returns current + latest + a boolean flag.
+
+        Includes pre-releases (nightlies). YouTube ships breaking changes
+        on ~monthly cadence and yt-dlp fixes them in nightlies days before
+        the next stable — locking to stable means "Up to date" lies for
+        days at a time when things are actively broken."""
         try:
             import urllib.request
             req = urllib.request.Request(
@@ -1585,21 +1827,25 @@ class PyBridge:
                 data = json.loads(resp.read())
         except Exception as exc:
             return {"error": str(exc)[:200]}
-        latest = (data.get("info") or {}).get("version") or ""
+        # info.version is stable-only; releases dict has every version
+        # ever published, including pre-releases. Pick the highest.
+        releases = list((data.get("releases") or {}).keys())
+        latest = max(releases, key=self._version_tuple, default="") if releases else ""
         current = self.ytdlp_version()
         return {
             "current": current,
             "latest": latest,
+            "is_prerelease": bool(latest and "dev" in latest.lower()),
             "update_available": self._version_is_newer(latest, current),
         }
 
     def ytdlp_update(self) -> Dict[str, Any]:
-        """Actually run `pip install -U yt-dlp` in the current Python.
-        Requires an app restart to load the new module — the caller
-        should tell the user so."""
+        """Actually run `pip install -U --pre yt-dlp` in the current Python.
+        `--pre` lets us grab nightlies when YouTube has broken the current
+        stable release. Requires an app restart to load the new module."""
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
+                [sys.executable, "-m", "pip", "install", "-U", "--pre", "yt-dlp"],
                 capture_output=True, text=True, timeout=180,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -1612,14 +1858,21 @@ class PyBridge:
             return {"ok": False, "error": str(exc)[:200]}
 
     @staticmethod
-    def _version_is_newer(latest: str, current: str) -> bool:
-        """Compare CalVer-style yt-dlp versions ("2026.07.14")."""
+    def _version_tuple(v: str) -> tuple:
+        """CalVer-friendly version parser. Drops non-numeric segments like
+        `dev0` so nightlies compare cleanly against stables:
+            2026.7.4                 -> (2026, 7, 4)
+            2026.7.23.234303.dev0    -> (2026, 7, 23, 234303)
+        Longer tuples with equal prefixes sort higher, which is what we want."""
         try:
-            l = tuple(int(p) for p in re.split(r"[.\-]", latest) if p.isdigit())
-            c = tuple(int(p) for p in re.split(r"[.\-]", current) if p.isdigit())
-            return bool(l and c and l > c)
+            return tuple(int(p) for p in re.split(r"[.\-]", v or "") if p.isdigit())
         except Exception:
-            return False
+            return ()
+
+    @classmethod
+    def _version_is_newer(cls, latest: str, current: str) -> bool:
+        l, c = cls._version_tuple(latest), cls._version_tuple(current)
+        return bool(l and c and l > c)
 
     _YT_URL_RE = re.compile(
         r"https?://(?:www\.|m\.|music\.)?(?:youtube\.com/(?:watch\?[^\s]*v=|playlist\?[^\s]*list=|shorts/|live/)|youtu\.be/)[\w\-?=&/]+",

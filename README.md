@@ -159,9 +159,14 @@ periodic security refreshes (weeks to months).
 ## Troubleshooting
 
 **"Only 360p is available."**
-Cookies aren't reaching yt-dlp. Either the cookies file wasn't picked, the
-Chrome cookie DB is locked (close Chrome), or your session expired
-(re-export). Look under the Quality dropdown for the app's own diagnosis.
+Two possible causes; the app's diagnosis line under the Quality dropdown
+will say which one:
+- Bundled `bin\qjs.exe` is missing or antivirus-quarantined — the JS
+  runtime that decrypts YouTube's `nsig` signature isn't reachable, so
+  yt-dlp only sees low-res streams. Restore the file or install Node.js.
+- Cookies aren't reaching yt-dlp. Either the cookies file wasn't picked,
+  the Chrome cookie DB is locked (close Chrome), or your session expired
+  (re-export).
 
 **"Requested format is not available."**
 Usually means yt-dlp is out of date. Settings → **yt-dlp version** → **Check
@@ -223,6 +228,10 @@ ui/                         Single-page frontend (the "YouT Manager" design)
                               crash modal, clipboard prompt
 
 assets/                     App icon (multi-resolution .ico + png/icns)
+bin/                        Bundled QuickJS binary (~1.8 MB) — yt-dlp
+                            needs a JS runtime to decrypt YouTube's nsig
+                            signature; without it many videos would fail
+                            with "Requested format is not available"
 scripts/                    Dev + build tooling
   create_icon.py              Renders the icon from the design
   build.ps1                   Reproducible build (venv + PyInstaller + zip)
