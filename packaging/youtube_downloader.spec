@@ -46,6 +46,9 @@ hiddenimports = list(ytdlp_hidden) + [
     # truststore hooks Python's ssl module at import time; make sure
     # it's present in the frozen build even though we import it lazily.
     "truststore",
+    # winotify is imported lazily inside _fire_batch_toast; PyInstaller
+    # doesn't see the deferred import so we hint it here.
+    "winotify",
 ]
 
 a = Analysis(

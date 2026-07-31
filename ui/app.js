@@ -88,6 +88,7 @@ const FakeApi = {
   }),
   ytdlp_version:async () => "2026.07.14",
   app_version:  async () => "v0.0.0-dev",
+  get_history_page: async () => ({ rows: [], total: 0, page: 1, pages: 1, page_size: 15 }),
   quit_app:     async () => { window.close(); },
   minimize:     async () => {},
   maximize:     async () => {},
@@ -516,6 +517,11 @@ function renderView() {
   $("view-downloads").hidden = state.view !== "downloads";
   $("view-settings").hidden  = state.view !== "settings";
   $("view-analytics").hidden = state.view !== "analytics";
+  // Top-bar "Search downloads" only applies to the queue view — hide it
+  // on Settings/Analytics so users don't confuse it with the Analytics
+  // history search or expect it to filter settings.
+  const sw = $("search-wrap");
+  if (sw) sw.style.visibility = state.view === "downloads" ? "visible" : "hidden";
   document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === state.view));
   renderCrumb();
   if (state.view === "settings")  renderSettings();
@@ -523,6 +529,11 @@ function renderView() {
     // Refresh from disk each time the user opens Analytics so recently
     // finished downloads show up without needing a full app restart.
     refreshAnalytics().then(renderAnalytics);
+  }
+  if (state.view === "downloads") {
+    // Rows may have been mutated in-place by progress events that fired
+    // while we were on another view — repaint to reflect the latest state.
+    renderRows(); renderDetail(); renderFooter();
   }
 }
 
@@ -568,6 +579,15 @@ function renderSettings() {
       render: () => textCtrl(s.retries, v => s.retries = v) },
     { name: "Timeout (seconds)", desc: "Seconds without data before aborting.",
       render: () => textCtrl(s.timeout, v => s.timeout = v) },
+    { name: "Speed limit", desc: "Per-download cap. Blank = unlimited. Use K/M/G suffix, e.g. \"500K\", \"1.5M\".",
+      render: () => {
+        const inp = el("input", { className: "set-input mono" });
+        inp.value = s.speed_limit || "";
+        inp.placeholder = "e.g. 500K, 10M";
+        inp.style.width = "140px";
+        inp.addEventListener("change", () => { s.speed_limit = inp.value.trim(); });
+        return inp;
+      } },
     { name: "Cookies file (.txt)",
       desc: "Preferred over the browser dropdown. Export with the \"Get cookies.txt LOCALLY\" extension while signed into YouTube. Works with your browser open.",
       render: () => {
@@ -750,19 +770,43 @@ function renderAnalytics() {
   $("chart-labels").innerHTML = `<text x="30" y="166">Jun 28</text><text x="148" y="166">Jul 4</text><text x="266" y="166">Jul 10</text><text x="384" y="166">Jul 16</text><text x="502" y="166">Jul 22</text><text x="574" y="166">Jul 27</text>`;
   $("chart-total").textContent = `last 30 days · ${a.perDay.reduce((s, d) => s + d[0], 0)} total`;
 
+  renderHistoryTable();
+}
+
+// Paginated + filtered history table. Backend does the heavy lifting;
+// this just renders the current page and wires the filter inputs.
+async function renderHistoryTable() {
+  state.hist = state.hist || { q: "", from: "", to: "", status: "", page: 1 };
+  const res = await api().get_history_page(state.hist);
   const hist = $("hist-rows");
   hist.innerHTML = "";
   const statusMap = { Done: "done", Failed: "failed", Queued: "queued" };
-  a.history.forEach(([time, title, status, size], i, arr) => {
-    const row = el("div", { className: "hist-row" });
-    if (i === arr.length - 1) row.style.borderBottomColor = "transparent";
-    row.innerHTML = `
-      <span class="time">${escapeHtml(time)}</span>
-      <span class="title">${escapeHtml(title)}</span>
-      <span><span class="st ${statusMap[status] || "queued"}"><span class="dot"></span>${escapeHtml(status)}</span></span>
-      <span class="size">${escapeHtml(size)}</span>`;
-    hist.appendChild(row);
-  });
+  if (!res.rows.length) {
+    const empty = el("div", { className: "hist-row" });
+    empty.style.gridTemplateColumns = "1fr";
+    empty.style.color = "var(--tx3)";
+    empty.style.borderBottomColor = "transparent";
+    empty.textContent = res.total === 0 && !state.hist.q && !state.hist.from && !state.hist.to && !state.hist.status
+      ? "No downloads yet."
+      : "No entries match these filters.";
+    hist.appendChild(empty);
+  } else {
+    res.rows.forEach((h, i, arr) => {
+      const row = el("div", { className: "hist-row" });
+      if (i === arr.length - 1) row.style.borderBottomColor = "transparent";
+      const ts = `${h.date || ""} ${h.time || ""}`.trim();
+      row.innerHTML = `
+        <span class="time">${escapeHtml(ts)}</span>
+        <span class="title" title="${escapeHtml(h.url || "")}">${escapeHtml(h.title || "")}</span>
+        <span><span class="st ${statusMap[h.status] || "queued"}"><span class="dot"></span>${escapeHtml(h.status || "")}</span></span>
+        <span class="size">${escapeHtml(h.size || "—")}</span>`;
+      hist.appendChild(row);
+    });
+  }
+  $("hist-total").textContent = res.total === 1 ? "1 entry" : `${res.total.toLocaleString()} entries`;
+  $("hist-page-info").textContent = res.pages > 0 ? `Page ${res.page} of ${res.pages}` : "";
+  $("hist-prev").disabled = res.page <= 1;
+  $("hist-next").disabled = res.page >= res.pages;
 }
 
 // -------- context menu --------
@@ -847,6 +891,7 @@ function openDialog() {
   state.videoInfo = null;
   state.playlist = null; state.playlistLoading = false;
   state.playlistError = null; state.playlistPicked = null;
+  const subs = $("dlg-subs"); if (subs) subs.checked = false;
   // Reset to Video mode each open. Bitrate keeps the last saved default.
   state.dlgMode = "video";
   state.audioBitrate = state.settings?.mp3_bitrate || "192";
@@ -894,6 +939,11 @@ function updateStage2Visibility() {
   $("stage2").hidden = !show;
   if (show) renderFormatOptions();
   renderPlaylistCard();
+  // Subtitles only apply to video downloads — hide the row in audio mode
+  // (yt-dlp's audio-only pipeline still writes .vtt if asked, but it's
+  // just noise for someone who wants an MP3 file).
+  const subsField = $("subs-field");
+  if (subsField) subsField.hidden = state.dlgMode === "audio";
 }
 function updateSubmitButtons() {
   const canGo = stage2Ready()
@@ -1205,11 +1255,13 @@ async function submitDialog() {
   // stuffed into a universal container.
   const pickedFormat = (state.formats || []).find(f => f.format_id === state.formatId);
   const container = pickedFormat ? (pickedFormat.container || "") : "";
+  const wantSubs = !!$("dlg-subs")?.checked;
   const options = isAudio
     ? { audio: true, bitrate: state.audioBitrate }
     : {
         format_id: state.formatId && state.formatId !== "best" ? state.formatId : null,
         container,
+        subs: wantSubs,
       };
 
   // Duplicate check for single-URL video/audio adds (playlists and batch
@@ -1532,6 +1584,24 @@ function wire() {
   $("export-csv").addEventListener("click",     () => api().export_history_csv?.());
   $("clear-history").addEventListener("click",  async () => { if (confirm("Clear download history?")) { await api().clear_history?.(); await refreshAnalytics(); renderAnalytics(); } });
 
+  // history filters / pagination — debounced search, immediate for others
+  const kickHist = () => { state.hist.page = 1; renderHistoryTable(); };
+  let _histTimer;
+  $("hist-search").addEventListener("input", (e) => {
+    clearTimeout(_histTimer);
+    _histTimer = setTimeout(() => { state.hist.q = e.target.value.trim(); kickHist(); }, 250);
+  });
+  $("hist-from").addEventListener("change",   (e) => { state.hist.from = e.target.value; kickHist(); });
+  $("hist-to").addEventListener("change",     (e) => { state.hist.to = e.target.value; kickHist(); });
+  $("hist-status").addEventListener("change", (e) => { state.hist.status = e.target.value; kickHist(); });
+  $("hist-clear-filters").addEventListener("click", () => {
+    $("hist-search").value = ""; $("hist-from").value = ""; $("hist-to").value = ""; $("hist-status").value = "";
+    state.hist = { q: "", from: "", to: "", status: "", page: 1 };
+    renderHistoryTable();
+  });
+  $("hist-prev").addEventListener("click", () => { if (state.hist.page > 1) { state.hist.page--; renderHistoryTable(); } });
+  $("hist-next").addEventListener("click", () => { state.hist.page = (state.hist.page || 1) + 1; renderHistoryTable(); });
+
   // keyboard shortcuts
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.key.toLowerCase() === "n") { e.preventDefault(); openDialog(); }
@@ -1577,11 +1647,15 @@ function flashSave() {
 
 // Progress events pushed from Python
 window.onEvent = function(payload) {
-  if (payload.type === "progress" && state.view === "downloads") {
+  if (payload.type === "progress") {
+    // Always apply the update to state.queue, regardless of current view.
+    // Otherwise Done/Failed events that arrive while the user is looking
+    // at Analytics/Settings get dropped, and the row stays stuck at its
+    // last mid-download percentage until a full queue refresh.
     const it = state.queue.find(x => x.id === payload.id);
     if (it) {
       Object.assign(it, payload.data);
-      renderRows(); renderDetail(); renderFooter();
+      if (state.view === "downloads") { renderRows(); renderDetail(); renderFooter(); }
     }
   } else if (payload.type === "queue") {
     state.queue = payload.data;
@@ -1634,11 +1708,23 @@ function hideCrashModal() { $("crash-modal").classList.add("hidden"); }
 function promptDuplicate(dup) {
   return new Promise((resolve) => {
     const inQueue = dup.where === "queue";
-    $("dup-message").textContent = inQueue
-      ? "This video is already in your queue:"
-      : "You've downloaded this video before:";
+    const n = Number(dup.count || 1);
+    // Message reflects the actual multiplicity — "you have 4 copies" is
+    // very different information from "you have this once".
+    if (n > 1) {
+      $("dup-message").textContent = inQueue
+        ? `You already have ${n} copies of this video in your queue. Latest copy:`
+        : `You've downloaded this video ${n} times before. Latest copy:`;
+    } else {
+      $("dup-message").textContent = inQueue
+        ? "This video is already in your queue:"
+        : "You've downloaded this video before:";
+    }
     $("dup-title").textContent = dup.title || "(untitled)";
     const bits = [];
+    // Exact filename first so users can tell "Title.mp4" from "Title (1).mp4"
+    // when they've re-downloaded the same video multiple times.
+    if (dup.file)    bits.push(dup.file);
     if (dup.status)  bits.push(dup.status.toLowerCase());
     if (dup.quality) bits.push(dup.quality);
     if (dup.size)    bits.push(dup.size);

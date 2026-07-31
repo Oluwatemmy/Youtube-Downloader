@@ -32,12 +32,25 @@ to play in VLC / Movies & TV / whatever, or drag into a video editor.
 
 - **Real per-video format list** — after you paste a URL the Quality dropdown
   fills with the actual streams YouTube has for that video, each with its
-  file size (`1080p MP4 · 138 MB`), not a guess-and-hope generic ladder
+  file size (`1080p MP4 · 138 MB`), not a guess-and-hope generic ladder.
+  Sizes only show when yt-dlp actually knows them — no misleading estimates
+- **Video preview in Add URL** — thumbnail, title, uploader, duration, and
+  view count populate a card as soon as metadata is fetched, so you know
+  you pasted the right link before hitting Download
 - **MP3 extraction** with a bitrate ladder (320 / 256 / 192 / 128 / 96 kbps)
   — pulls the audio and produces a real `.mp3` via FFmpeg, not just the
   source audio stream
 - **Playlist support** — paste a playlist URL, get a checklist of videos;
   batch or subset, all queued into a subfolder named after the playlist
+- **Subtitle download** — checkbox in Add URL fetches English captions
+  (real + auto-generated) as `.vtt` alongside the video
+- **Duplicate detection** — paste a URL you've already downloaded and get
+  a prompt showing how many copies you have and the latest filename;
+  Open file / Show in queue / Download again. "Download again" saves as
+  `Title (1).mp4` so the original stays intact; prompt is skipped if you'd
+  already deleted the earlier file
+- **Bundled QuickJS** for YouTube's `nsig` signature decryption — no
+  external Node or Deno install needed. Ships in `bin/qjs.exe` (~1.8 MB)
 - **Cookies-friendly** — a first-run wizard walks you through exporting
   `cookies.txt` from a browser extension so YouTube's 2026 bot check
   doesn't gate you to 360p
@@ -49,13 +62,20 @@ to play in VLC / Movies & TV / whatever, or drag into a video editor.
   Stop discards it so the next attempt starts fresh
 - **Windows-native window** — proper drag, resize, min/max, snap-to-edges;
   dark and light themes
+- **Windows toast on batch complete** — when the last active download
+  resolves, you get a notification with the count (`3 complete · 1 failed`).
+  Suppressed if the app is already focused
+- **Speed limit** — per-download cap in Settings → Advanced (`500K`, `1M`);
+  useful when you don't want a queue to hog bandwidth
 - **Persistent queue and history** — quit mid-download, reopen, everything
-  is there. Analytics tab shows totals + per-day chart
+  is there. Analytics tab has date-range + status + search filters, paginated
+  history, and shows totals + per-day chart
 - **Clipboard detection** — copy a YouTube URL, alt-tab to the app, get a
   one-click prompt to add it
 - **yt-dlp auto-updater** — Settings has a "Check for updates" button and a
   quiet weekly check that shows a dot in the sidebar when a new release is
-  out. YouTube changes their site monthly, so this is important.
+  out. Includes pre-releases so you have a fix path when YouTube breaks
+  the current stable and only a nightly has the patch
 - **Crash handler** — uncaught errors surface as a real dialog with the
   traceback and a Copy button, instead of dying to stderr
 
@@ -252,13 +272,11 @@ progress and log events push the other way via
 
 Rough order of what's next:
 
-- Drag-and-drop URLs from the browser
-- Subtitle download option in the Add URL dialog
-- Windows toast notification when a batch completes
-- Speed limit per download
 - Minimize to tray for long-running queues
+- Auto-follow OS theme (currently a manual toggle)
 - Code-signed installer (removes the SmartScreen warning)
-- Minimize to tray for long-running queues
+- PO token / bgutil sidecar — if / when YouTube starts requiring it for
+  clients we depend on (currently not needed; QuickJS handles the common case)
 
 ## Credits
 

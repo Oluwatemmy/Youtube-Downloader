@@ -4,3 +4,4 @@ aiofiles>=23.0.0
 tqdm>=4.65.0
 truststore>=0.9.0
 pywebview>=6.0
+winotify>=1.1.0; sys_platform == "win32"
