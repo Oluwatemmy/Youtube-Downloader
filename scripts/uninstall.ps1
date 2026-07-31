@@ -4,6 +4,17 @@
 
 $ErrorActionPreference = "Stop"
 
+# Same visible-error pattern as install.ps1 — surface the real message
+# instead of the CMD window silently closing on failure.
+trap {
+    Write-Host ""
+    Write-Host "  Uninstall failed:" -ForegroundColor Red
+    Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    Read-Host "  Press Enter to close"
+    exit 1
+}
+
 $AppName    = "YouTManager"
 $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\$AppName"
 $SmLnk      = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$AppName.lnk"
@@ -23,17 +34,26 @@ if ($reply -notmatch "^[Yy]") {
 }
 
 # --- Kill any running instance ---------------------------------------
-Get-Process YouTManager -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Milliseconds 400
+# Kill the app AND its WebView2 subprocesses. Just killing YouTManager
+# leaves msedgewebview2.exe children alive for a few hundred ms, and
+# those children keep DLLs locked so the folder can't be removed.
+Get-Process YouTManager     -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process msedgewebview2  -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like "$InstallDir*" } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 600
 
 # --- Remove app files -------------------------------------------------
 if (Test-Path $InstallDir) {
     Write-Host "  Removing $InstallDir ..."
-    # Try a few times -- Windows may still hold locks on freshly-closed
-    # WebView2 subprocess resources.
-    for ($i = 0; $i -lt 5; $i++) {
+    # Delete files one-by-one (skipping locked ones) then the folder — a
+    # single Remove-Item -Recurse aborts on the first locked file and
+    # leaves everything else behind.
+    for ($i = 0; $i -lt 8; $i++) {
+        Get-ChildItem $InstallDir -Recurse -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
         try {
-            Remove-Item -Recurse -Force $InstallDir
+            Remove-Item -Recurse -Force $InstallDir -ErrorAction Stop
             break
         } catch {
             Start-Sleep -Milliseconds 500
@@ -41,7 +61,8 @@ if (Test-Path $InstallDir) {
     }
     if (Test-Path $InstallDir) {
         Write-Host "  Warning: could not fully remove $InstallDir" -ForegroundColor Yellow
-        Write-Host "  Some files may be locked. Delete manually after logging out."
+        Write-Host "  Some files stayed locked (typically Windows Defender / Search Indexer)." -ForegroundColor Yellow
+        Write-Host "  Reboot and delete the folder manually, or re-run this script after reboot." -ForegroundColor Yellow
     }
 }
 

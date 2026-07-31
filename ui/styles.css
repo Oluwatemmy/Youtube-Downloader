@@ -420,13 +420,25 @@ body.density-compact .tbl-row { height: 38px; }
 .detail-tabs button:hover  { color: var(--tx); }
 .detail-title { flex: 1; }
 .detail-file { font-size: 11px; color: var(--tx3); margin-right: 8px; }
+/* Visible enough that first-time users find it. Was a 24×24 icon-only
+   button that read as decoration; now it's a labelled pill with a border. */
 .detail-toggle {
-  width: 24px; height: 24px; border-radius: 5px;
-  display: flex; align-items: center; justify-content: center;
+  height: 26px; padding: 0 10px; border-radius: 6px;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--layer2); border: 1px solid var(--stroke);
   color: var(--tx2);
-  transition: background 120ms ease-out;
+  font: 500 11.5px/1 var(--sans);
+  transition: background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
 }
-.detail-toggle:hover { background: var(--layer2); color: var(--tx); }
+.detail-toggle::before {
+  content: "Hide details"; letter-spacing: .1px;
+}
+.detail-toggle.closed::before { content: "Show details"; }
+.detail-toggle:hover {
+  background: var(--layer3);
+  color: var(--tx);
+  border-color: var(--stroke2);
+}
 .detail-toggle svg  { transition: transform 160ms ease; }
 .detail-toggle.closed svg { transform: rotate(180deg); }
 
@@ -652,6 +664,10 @@ body.density-compact .tbl-row { height: 38px; }
 }
 .btn-accent:hover  { filter: brightness(1.09); }
 .btn-accent:active { transform: translateY(1px); }
+/* Danger modifier for accent buttons — used on destructive confirms
+   (Clear history, etc.) so the primary action reads as "this is irreversible". */
+.btn-accent.btn-danger { background: var(--bad); }
+.btn-accent.btn-danger:hover { filter: brightness(1.08); }
 .btn-plain {
   height: 32px; padding: 0 14px; border-radius: 7px;
   background: var(--layer2); border: 1px solid var(--stroke2);
@@ -915,6 +931,33 @@ body.density-compact .tbl-row { height: 38px; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .picker-dur { font: 400 11px/1 var(--mono); color: var(--tx3); flex: none; }
+/* Availability chip in the playlist picker — Private / Deleted / etc. */
+.picker-chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  font: 600 10.5px/1.5 var(--sans);
+  color: var(--tx3);
+  background: var(--layer3);
+  border: 1px solid var(--stroke);
+  vertical-align: 1px;
+  letter-spacing: .1px;
+}
+.picker-row-blocked {
+  opacity: .55; cursor: not-allowed;
+}
+.picker-row-blocked:hover { background: transparent !important; }
+/* Lock icon in place of the checkbox for blocked rows — makes it obvious
+   at a glance that the row can't be picked. */
+.picker-lock {
+  width: 18px; height: 18px; flex: none;
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--tx3);
+  background: var(--layer3);
+  border: 1px dashed var(--stroke2);
+}
 
 /* Video info card — YouTube-style compact preview shown at the top of
    the Add URL dialog once metadata has been fetched. */
