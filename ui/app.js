@@ -51,6 +51,7 @@ const FakeApi = {
   get_analytics:async () => FAKE_ANALYTICS,
   add_url:      async (url, opts) => { console.log("add_url", url, opts); return true; },
   add_batch:    async (urls, opts) => { console.log("add_batch", urls, opts); return true; },
+  check_duplicate: async () => ({}),
   get_formats:  async (url) => ({
     title: "Sample video", duration: "5:42",
     formats: [
@@ -86,6 +87,7 @@ const FakeApi = {
     ],
   }),
   ytdlp_version:async () => "2026.07.14",
+  app_version:  async () => "v0.0.0-dev",
   quit_app:     async () => { window.close(); },
   minimize:     async () => {},
   maximize:     async () => {},
@@ -842,6 +844,7 @@ function openDialog() {
   state.dialog = true; state.urlValue = ""; state.batchValue = "";
   state.formats = null; state.formatId = "best"; state.formatsLoading = false;
   state.formatsError = null; state.formatsUrl = null; state.formatsNote = null;
+  state.videoInfo = null;
   state.playlist = null; state.playlistLoading = false;
   state.playlistError = null; state.playlistPicked = null;
   // Reset to Video mode each open. Bitrate keeps the last saved default.
@@ -978,6 +981,27 @@ function updateDialogHint() {
   $("dlg-hint").textContent = "Paste a URL to get started";
 }
 
+function renderVideoInfo() {
+  const card = $("video-info");
+  if (!card) return;
+  const info = state.videoInfo;
+  if (!info || !info.title) { card.hidden = true; return; }
+  card.hidden = false;
+  const thumb = $("video-info-thumb");
+  if (info.thumbnail) { thumb.src = info.thumbnail; thumb.style.visibility = "visible"; }
+  else                { thumb.removeAttribute("src"); thumb.style.visibility = "hidden"; }
+  $("video-info-title").textContent    = info.title || "";
+  $("video-info-uploader").textContent = info.uploader || "";
+  $("video-info-dur").textContent      = info.duration && info.duration !== "—" ? info.duration : "";
+  // Compact meta line: <duration> · <views> views · <N> qualities
+  const bits = [];
+  if (info.duration && info.duration !== "—") bits.push(info.duration);
+  if (info.views) bits.push(`${info.views} views`);
+  const n = (state.formats || []).length;
+  if (n) bits.push(`${n} ${n === 1 ? "quality" : "qualities"}`);
+  $("video-info-meta").textContent = bits.join(" · ");
+}
+
 function renderFormatOptions() {
   const sel = $("dlg-quality");
   sel.innerHTML = "";
@@ -1072,8 +1096,10 @@ function scheduleFormatFetch(url) {
   clearTimeout(_formatFetchTimer);
   if (!url || !/youtu\.?be/i.test(url)) {
     state.formats = null; state.formatsLoading = false; state.formatsError = null;
-    state.formatsNote = null; state.playlist = null; state.playlistLoading = false;
+    state.formatsNote = null; state.videoInfo = null;
+    state.playlist = null; state.playlistLoading = false;
     state.playlistError = null; state.playlistPicked = null;
+    renderVideoInfo();
     updateStage2Visibility(); updateFetchStatus(); updateDialogHint(); updateSubmitButtons();
     return;
   }
@@ -1094,13 +1120,21 @@ function scheduleVideoFormatFetch(url) {
       if (mySeq !== _formatFetchSeq) return;
       if (res.error) {
         state.formats = null; state.formatsError = "Couldn't fetch formats: " + res.error;
-        state.formatsNote = null;
+        state.formatsNote = null; state.videoInfo = null;
       } else {
         state.formats = res.formats || [];
         state.formatsUrl = url;
         state.formatId = state.formats[0]?.format_id || "best";
         state.formatsNote = res.note || null;
+        state.videoInfo = res.playlist ? null : {
+          title:     res.title,
+          uploader:  res.uploader,
+          duration:  res.duration,
+          thumbnail: res.thumbnail,
+          views:     res.views,
+        };
       }
+      renderVideoInfo();
     } catch (exc) {
       if (mySeq !== _formatFetchSeq) return;
       state.formatsError = "Couldn't fetch formats: " + exc.message;
@@ -1177,6 +1211,18 @@ async function submitDialog() {
         format_id: state.formatId && state.formatId !== "best" ? state.formatId : null,
         container,
       };
+
+  // Duplicate check for single-URL video/audio adds (playlists and batch
+  // have their own semantics — a playlist entry might dup only some of
+  // its videos; the backend still dedupes per-item in that case).
+  if (state.dlgTab === "single" && !state.playlist && state.urlValue) {
+    const dup = await api().check_duplicate(state.urlValue);
+    if (dup && dup.where) {
+      const proceed = await promptDuplicate(dup);
+      if (!proceed) return;                // user cancelled or opened existing
+      options.force = true;                // bypass backend dedupe check
+    }
+  }
 
   // Playlist: iterate entries (respecting any picker selection) and
   // queue them as a batch — bypasses the single/batch tab distinction.
@@ -1350,7 +1396,13 @@ function renderSpeedChart() {
 async function refreshQueue() {
   state.queue = await api().get_queue();
   if (state.sel && !state.queue.find(x => x.id === state.sel)) state.sel = null;
-  if (!state.sel && state.queue.length) state.sel = state.queue[0].id;
+  // Default selection = newest (highest id), to match the newest-first
+  // default sort order — otherwise the app opens with the oldest row
+  // (bottom of the list) selected, which looks wrong.
+  if (!state.sel && state.queue.length) {
+    const newest = state.queue.reduce((a, b) => (b.id || 0) > (a.id || 0) ? b : a);
+    state.sel = newest.id;
+  }
   renderAll();
 }
 async function refreshSettings() {
@@ -1363,6 +1415,12 @@ async function refreshAnalytics() {
 async function refreshVersion() {
   try { state.ytdlpVersion = await api().ytdlp_version(); } catch { state.ytdlpVersion = "—"; }
   $("ytdlp-version").textContent = state.ytdlpVersion;
+  try {
+    const av = await api().app_version();
+    $("app-version").textContent = av || "—";
+  } catch {
+    $("app-version").textContent = "—";
+  }
 }
 
 function wire() {
@@ -1567,6 +1625,60 @@ function showCrashModal(name, message, tb) {
   $("crash-modal").classList.remove("hidden");
 }
 function hideCrashModal() { $("crash-modal").classList.add("hidden"); }
+
+// ---------------------------------------------------------------
+// Duplicate URL prompt — resolves to true if the user wants to
+// re-download anyway, false if they opened the existing file, jumped
+// to it in the queue, or cancelled.
+// ---------------------------------------------------------------
+function promptDuplicate(dup) {
+  return new Promise((resolve) => {
+    const inQueue = dup.where === "queue";
+    $("dup-message").textContent = inQueue
+      ? "This video is already in your queue:"
+      : "You've downloaded this video before:";
+    $("dup-title").textContent = dup.title || "(untitled)";
+    const bits = [];
+    if (dup.status)  bits.push(dup.status.toLowerCase());
+    if (dup.quality) bits.push(dup.quality);
+    if (dup.size)    bits.push(dup.size);
+    if (dup.date)    bits.push(dup.date);
+    $("dup-meta").textContent = bits.join(" · ") || "";
+
+    // Show/hide the situationally-relevant buttons.
+    const canOpen = inQueue && dup.status === "Done";
+    const canShow = inQueue;
+    $("dup-open").hidden = !canOpen;
+    $("dup-show").hidden = !canShow;
+
+    const cleanup = () => {
+      $("dup-modal").classList.add("hidden");
+      $("dup-modal").onclick = null;
+      $("dup-close").onclick = null;
+      $("dup-cancel").onclick = null;
+      $("dup-open").onclick = null;
+      $("dup-show").onclick = null;
+      $("dup-again").onclick = null;
+    };
+    const done = (proceed) => { cleanup(); resolve(proceed); };
+
+    $("dup-modal").onclick  = () => done(false);
+    $("dup-close").onclick  = () => done(false);
+    $("dup-cancel").onclick = () => done(false);
+    $("dup-open").onclick   = async () => { await api().open_file(dup.id); done(false); };
+    $("dup-show").onclick   = () => {
+      // Close the Add URL dialog, jump to the row in the queue.
+      closeDialog();
+      state.sel = dup.id;
+      state.cat = "All";
+      renderAll();
+      done(false);
+    };
+    $("dup-again").onclick  = () => done(true);
+
+    $("dup-modal").classList.remove("hidden");
+  });
+}
 
 // ---------------------------------------------------------------
 // Playlist video picker — checklist modal to pick a subset of

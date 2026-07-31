@@ -53,7 +53,7 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 20V11"/><path d="M10.5 20V4.5"/><path d="M16.5 20v-6.5"/><path d="M21 20H3"/></svg>
           Analytics
         </button>
-        <div class="side-version">v2.4.1 · yt-dlp <span id="ytdlp-version">—</span></div>
+        <div class="side-version"><span id="app-version">—</span> · yt-dlp <span id="ytdlp-version">—</span></div>
       </div>
     </div>
 
@@ -238,6 +238,19 @@
             <button class="btn-plain" id="playlist-choose" style="height:30px">Choose videos…</button>
           </div>
         </div>
+        <!-- Video info card — populated once get_formats returns for a
+             single-video URL. Compact, matches YouTube's own preview shape. -->
+        <div id="video-info" class="video-info" hidden>
+          <div class="video-info-thumb-wrap">
+            <img id="video-info-thumb" class="video-info-thumb" alt=""/>
+            <span id="video-info-dur" class="video-info-dur"></span>
+          </div>
+          <div class="video-info-body">
+            <div id="video-info-title" class="video-info-title"></div>
+            <div id="video-info-uploader" class="video-info-uploader"></div>
+            <div id="video-info-meta" class="video-info-meta"></div>
+          </div>
+        </div>
         <div class="field" style="margin-bottom: 12px">
           <span class="field-label">Download as</span>
           <div class="mode-toggle" role="tablist">
@@ -275,6 +288,39 @@
 <!-- ============ context menu ============ -->
 <div class="ctx-scrim hidden" id="ctx-scrim"></div>
 <div class="ctx-menu hidden" id="ctx-menu"></div>
+
+<!-- ============ duplicate URL prompt ============ -->
+<div class="modal-backdrop hidden" id="dup-modal">
+  <div class="modal" style="width:520px" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:26px;height:26px;border-radius:6px;background:var(--warnS);display:flex;align-items:center;justify-content:center">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--warn)"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+        </div>
+        <span class="t">You've added this before</span>
+      </div>
+      <div class="title-spacer"></div>
+      <button class="modal-close" id="dup-close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p id="dup-message" style="font-size:13px;line-height:1.55;color:var(--tx2);margin-bottom:10px"></p>
+      <div style="padding:10px 12px;border-radius:7px;background:var(--layer2);border:1px solid var(--stroke);
+                  display:flex;flex-direction:column;gap:3px">
+        <div id="dup-title" style="font-size:13px;font-weight:600;color:var(--tx);word-break:break-word"></div>
+        <div id="dup-meta"  style="font:400 11.5px/1.4 var(--mono);color:var(--tx3)"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <div class="title-spacer"></div>
+      <button class="btn-quiet" id="dup-cancel">Cancel</button>
+      <button class="btn-plain" id="dup-open" hidden>Open file</button>
+      <button class="btn-plain" id="dup-show" hidden>Show in queue</button>
+      <button class="btn-accent" id="dup-again">Download again</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============ crash modal (uncaught Python / JS errors) ============ -->
 <div class="modal-backdrop hidden" id="crash-modal">

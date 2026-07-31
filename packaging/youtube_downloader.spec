@@ -32,6 +32,10 @@ pywebview_datas = collect_data_files("webview")
 datas = [
     (str(REPO_ROOT / "ui"),     "ui"),
     (str(REPO_ROOT / "assets"), "assets"),
+    # Bundled QuickJS binary (~1.8 MB) — yt-dlp needs a JS runtime to
+    # decrypt YouTube's nsig, otherwise many videos fail with "Requested
+    # format is not available". Ships in bin/ next to YouTManager.exe.
+    (str(REPO_ROOT / "bin"),    "bin"),
 ] + ytdlp_datas + pywebview_datas
 
 hiddenimports = list(ytdlp_hidden) + [
