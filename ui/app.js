@@ -88,6 +88,8 @@ const FakeApi = {
   }),
   ytdlp_version:async () => "2026.07.14",
   app_version:  async () => "v0.0.0-dev",
+  open_issues_page: async () => { console.log("would open github issues"); return true; },
+  check_duplicates_bulk: async () => ({ duplicates: [], count: 0, total: 0 }),
   get_history_page: async () => ({ rows: [], total: 0, page: 1, pages: 1, page_size: 15 }),
   quit_app:     async () => { window.close(); },
   minimize:     async () => {},
@@ -517,11 +519,12 @@ function renderView() {
   $("view-downloads").hidden = state.view !== "downloads";
   $("view-settings").hidden  = state.view !== "settings";
   $("view-analytics").hidden = state.view !== "analytics";
-  // Top-bar "Search downloads" only applies to the queue view — hide it
-  // on Settings/Analytics so users don't confuse it with the Analytics
-  // history search or expect it to filter settings.
-  const sw = $("search-wrap");
-  if (sw) sw.style.visibility = state.view === "downloads" ? "visible" : "hidden";
+  // Queue-specific toolbar (Add URL, Resume, Pause, Stop, Retry, Delete,
+  // Folder, Search) only makes sense on the Downloads view — hide the
+  // whole bar on Settings/Analytics so users can't try to delete a row
+  // they can't see. Ctrl+N still opens Add URL from anywhere.
+  const toolbar = $("toolbar");
+  if (toolbar) toolbar.style.display = state.view === "downloads" ? "" : "none";
   document.querySelectorAll(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === state.view));
   renderCrumb();
   if (state.view === "settings")  renderSettings();
@@ -618,6 +621,13 @@ function renderSettings() {
     { name: "yt-dlp version",
       desc: "YouTube changes their site regularly. Keep yt-dlp current or downloads will start failing.",
       render: () => renderYtdlpUpdateControl() },
+    { name: "Report an issue",
+      desc: "Opens the GitHub issues page in your browser. Bugs, feature requests, or feedback all welcome.",
+      render: () => {
+        const b = el("button", { className: "set-btn", text: "Open on GitHub" });
+        b.addEventListener("click", () => api().open_issues_page?.());
+        return b;
+      } },
   ]);
   host.appendChild(advanced);
 }
@@ -1282,11 +1292,16 @@ async function submitDialog() {
   // subfolder named after the playlist instead of scattering them.
   if (state.playlist) {
     const entries = state.playlist.entries || [];
-    const urls = state.playlistPicked
+    let urls = state.playlistPicked
       ? entries.filter(e => state.playlistPicked.has(e.url)).map(e => e.url)
       : entries.map(e => e.url);
     if (urls.length === 0) return;
+    const outcome = await handleBulkDuplicates(urls);
+    if (outcome === "cancel") return;
+    if (outcome === "skip") urls = await filterOutDuplicates(urls);
+    if (!urls.length) { closeDialog(); return; }
     const playlistOpts = { ...options, playlist_folder: state.playlist.title };
+    if (outcome === "force") playlistOpts.force = true;
     await api().add_batch(urls, playlistOpts);
     closeDialog();
     await refreshQueue();
@@ -1297,12 +1312,63 @@ async function submitDialog() {
     if (!state.urlValue) return;
     await api().add_url(state.urlValue, options);
   } else {
-    const urls = state.batchValue.split("\n").map(l => l.trim()).filter(Boolean);
+    let urls = state.batchValue.split("\n").map(l => l.trim()).filter(Boolean);
     if (!urls.length) return;
-    await api().add_batch(urls, options);
+    const outcome = await handleBulkDuplicates(urls);
+    if (outcome === "cancel") return;
+    if (outcome === "skip") urls = await filterOutDuplicates(urls);
+    if (!urls.length) { closeDialog(); return; }
+    const batchOpts = { ...options };
+    if (outcome === "force") batchOpts.force = true;
+    await api().add_batch(urls, batchOpts);
   }
   closeDialog();
   await refreshQueue();
+}
+
+// Returns "proceed" (no dupes), "skip" (drop dupes), "force" (add all
+// with force flag), or "cancel". Silent when there are zero duplicates.
+async function handleBulkDuplicates(urls) {
+  try {
+    const res = await api().check_duplicates_bulk?.(urls);
+    if (!res || !res.count) return "proceed";
+    return await promptBulkDuplicates(res.count, res.total);
+  } catch {
+    return "proceed";  // don't block on a backend hiccup
+  }
+}
+
+async function filterOutDuplicates(urls) {
+  const res = await api().check_duplicates_bulk?.(urls);
+  const dupeSet = new Set(res?.duplicates || []);
+  return urls.filter(u => !dupeSet.has(u));
+}
+
+function promptBulkDuplicates(n, total) {
+  return new Promise((resolve) => {
+    const newCount = total - n;
+    $("bdup-message").textContent =
+      `${n} of ${total} URL${total === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} already in your queue or history` +
+      (newCount > 0 ? ` — ${newCount} ${newCount === 1 ? "is" : "are"} new.` : `.`);
+    // If everything is a duplicate, "Skip duplicates" would queue nothing —
+    // hide it so the user has to pick Download all or Cancel.
+    $("bdup-skip").hidden = newCount === 0;
+    const cleanup = () => {
+      $("bdup-modal").classList.add("hidden");
+      $("bdup-modal").onclick = null;
+      $("bdup-close").onclick = null;
+      $("bdup-cancel").onclick = null;
+      $("bdup-skip").onclick = null;
+      $("bdup-force").onclick = null;
+    };
+    const pick = (v) => { cleanup(); resolve(v); };
+    $("bdup-modal").classList.remove("hidden");
+    $("bdup-modal").onclick  = () => pick("cancel");
+    $("bdup-close").onclick  = () => pick("cancel");
+    $("bdup-cancel").onclick = () => pick("cancel");
+    $("bdup-skip").onclick   = () => pick("skip");
+    $("bdup-force").onclick  = () => pick("force");
+  });
 }
 
 // -------- top-level render --------
@@ -1357,18 +1423,19 @@ function fmtSpeed(bps) {
 let _logFetchedFor = null;
 
 function renderLogPane() {
-  const log = $("pane-log");
-  log.innerHTML = "";
+  const host = $("log-lines") || $("pane-log");
+  host.innerHTML = "";
   const lines = state.selectedLog || [];
   if (!lines.length) {
-    log.appendChild(el("div", { className: "log-line tx3", text: "no log entries yet" }));
-    return;
+    host.appendChild(el("div", { className: "log-line tx3", text: "no log entries yet" }));
+  } else {
+    lines.forEach(([t, tone]) => {
+      host.appendChild(el("div", { className: "log-line " + tone, text: t }));
+    });
   }
-  lines.forEach(([t, tone]) => {
-    log.appendChild(el("div", { className: "log-line " + tone, text: t }));
-  });
   // Keep the newest line in view.
-  log.scrollTop = log.scrollHeight;
+  const pane = $("pane-log");
+  if (pane) pane.scrollTop = pane.scrollHeight;
 }
 
 async function refreshSelectedLog() {
@@ -1583,6 +1650,28 @@ function wire() {
   $("reset-settings").addEventListener("click", async () => { await api().reset_settings?.(); state.settings = await api().get_settings(); renderSettings(); });
   $("export-csv").addEventListener("click",     () => api().export_history_csv?.());
   $("clear-history").addEventListener("click",  async () => { if (confirm("Clear download history?")) { await api().clear_history?.(); await refreshAnalytics(); renderAnalytics(); } });
+  $("report-issue")?.addEventListener("click",  () => api().open_issues_page?.());
+
+  // Copy the currently-selected item's log to the clipboard so users can
+  // paste it straight into a bug report. Includes a small "Copied" flash
+  // for feedback since Windows doesn't confirm clipboard writes.
+  $("log-copy")?.addEventListener("click", async (ev) => {
+    const btn = ev.currentTarget;
+    const lines = state.selectedLog || [];
+    const text = lines.length
+      ? lines.map(([t]) => t).join("\n")
+      : "(no log entries)";
+    try {
+      await navigator.clipboard.writeText(text);
+      const orig = btn.textContent;
+      btn.textContent = "Copied";
+      btn.classList.add("done");
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove("done"); }, 1400);
+    } catch {
+      btn.textContent = "Copy failed";
+      setTimeout(() => { btn.textContent = "Copy log"; }, 1400);
+    }
+  });
 
   // history filters / pagination — debounced search, immediate for others
   const kickHist = () => { state.hist.page = 1; renderHistoryTable(); };
@@ -1810,6 +1899,18 @@ function renderPickerList() {
   });
   const shown = entries.length;
   $("picker-count").textContent = `${_pickerDraft.size} of ${state.playlist.count} selected${q ? ` · ${shown} shown` : ""}`;
+  // Toggle the primary bulk-action button based on selection state:
+  //   all selected  → "Unselect all" (a second click clears)
+  //   any missing   → "Select all"   (fills the rest)
+  // Semantics respect the current filter — with a search active it acts
+  // on the visible entries only, so users can pick per-topic subsets.
+  const allBtn = $("picker-all");
+  if (allBtn) {
+    const target = q ? entries : state.playlist.entries;
+    const allSelected = target.length > 0 && target.every(e => _pickerDraft.has(e.url));
+    allBtn.textContent = allSelected ? "Unselect all" : "Select all";
+    allBtn.dataset.mode = allSelected ? "unselect" : "select";
+  }
 }
 function wirePicker() {
   $("picker-modal").addEventListener("click", closePicker);
@@ -1825,8 +1926,20 @@ function wirePicker() {
     updateDownloadLabel();
     updateSubmitButtons();
   });
-  $("picker-all").addEventListener("click", () => {
-    _pickerDraft = new Set(state.playlist.entries.map(e => e.url));
+  $("picker-all").addEventListener("click", (ev) => {
+    // Filtered selection: only operate on what's visible. That way "Select
+    // all" while searching "remix" only ticks the remix results and doesn't
+    // silently touch entries the user can't see.
+    const q = _pickerFilter.trim().toLowerCase();
+    const target = q
+      ? state.playlist.entries.filter(e =>
+          (e.title + " " + (e.uploader || "")).toLowerCase().includes(q))
+      : state.playlist.entries;
+    if (ev.currentTarget.dataset.mode === "unselect") {
+      target.forEach(e => _pickerDraft.delete(e.url));
+    } else {
+      target.forEach(e => _pickerDraft.add(e.url));
+    }
     renderPickerList();
   });
   $("picker-none").addEventListener("click", () => {

@@ -66,6 +66,8 @@ SETTINGS_FILE   = _config_dir() / "settings.json"
 ANALYTICS_FILE  = _config_dir() / "analytics.json"
 HISTORY_FILE    = _config_dir() / "history.json"
 QUEUE_FILE      = _config_dir() / "queue.json"
+LOGS_DIR        = _config_dir() / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
 
 
 # ---------------------------------------------------------------
@@ -213,7 +215,11 @@ def _fire_batch_toast(done: int, failed: int) -> None:
         msg = " · ".join(parts) or f"{total} finished"
     try:
         icon = _toast_icon_path()
-        kwargs = {"app_id": "YouT Manager", "title": title, "msg": msg}
+        # app_id must match the AUMID stamped on the Start Menu shortcut
+        # by install.ps1 (SetCurrentProcessExplicitAppUserModelID in
+        # main.py registers the same value at process start). Windows
+        # uses that ID to look up the icon for the toast.
+        kwargs = {"app_id": "YouTManager", "title": title, "msg": msg}
         if icon:
             kwargs["icon"] = icon
         Notification(**kwargs).show()
@@ -385,9 +391,11 @@ class DownloadManager:
         self._batch_active: bool = False
         self._batch_done_count: int = 0
         self._batch_fail_count: int = 0
-        # Per-item captured log lines from yt-dlp. Kept in memory only —
-        # logs are ephemeral per session, not part of queue persistence.
-        # Each entry is [text, tone] where tone is a css class name.
+        # Per-item captured log lines from yt-dlp. Persisted to
+        # <config>/logs/<id>.log so users can copy-paste the exact log
+        # into a bug report even after restarting the app. Each entry is
+        # [text, tone] where tone is a css class name; on disk we store
+        # one line per row as "TONE\tTEXT" for easy grepping.
         self._logs: Dict[int, List[List[str]]] = {}
 
         # Restore any queue that was persisted from the previous session.
@@ -508,6 +516,11 @@ class DownloadManager:
                                     p.unlink()
                                 except OSError:
                                     pass
+
+        # Also drop the persisted log — a deleted row shouldn't leave
+        # an orphaned log file behind in AppData.
+        self._logs.pop(id_, None)
+        self._delete_log_file(id_)
 
         self._emit_queue()
         self._persist()
@@ -674,7 +687,9 @@ class DownloadManager:
 
     def _log(self, id_: int, tone: str, text: str) -> None:
         """Append one log line for an item and push an event to the UI.
-        Tone is one of: tx (default), tx2, tx3, acc, ok, bad, warn."""
+        Tone is one of: tx (default), tx2, tx3, acc, ok, bad, warn.
+        Also mirrors to disk so users can attach the log to a bug report
+        after restarting the app."""
         text = str(text).rstrip()
         if not text:
             return
@@ -683,9 +698,52 @@ class DownloadManager:
         if len(buf) > 300:  # cap so a chatty download doesn't grow unbounded
             del buf[:len(buf) - 300]
         self._on_event({"type": "log", "id": id_, "line": [text, tone]})
+        # Best-effort persistence — logging failures should never break
+        # the download itself, so we swallow any file-system errors.
+        try:
+            with open(LOGS_DIR / f"{id_}.log", "a", encoding="utf-8") as f:
+                f.write(f"{tone}\t{text}\n")
+        except OSError:
+            pass
+
+    def _load_log_file(self, id_: int) -> List[List[str]]:
+        """Read a persisted log from disk. Called when the UI asks for a
+        log that isn't in memory yet (i.e. after an app restart)."""
+        path = LOGS_DIR / f"{id_}.log"
+        if not path.exists():
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            return []
+        rows: List[List[str]] = []
+        for line in lines[-300:]:  # match the in-memory cap
+            line = line.rstrip("\n")
+            if "\t" in line:
+                tone, text = line.split("\t", 1)
+                rows.append([text, tone])
+            else:
+                rows.append([line, "tx"])
+        return rows
 
     def get_log(self, id_: int) -> List[List[str]]:
-        return list(self._logs.get(id_, []))
+        buf = self._logs.get(id_)
+        if buf is not None:
+            return list(buf)
+        # Not in memory — try disk (previous session's log).
+        loaded = self._load_log_file(id_)
+        if loaded:
+            self._logs[id_] = loaded
+        return list(loaded)
+
+    def _delete_log_file(self, id_: int) -> None:
+        """Wipe an item's log file — called from remove() so a deleted
+        queue row doesn't leave orphaned logs cluttering AppData."""
+        try:
+            (LOGS_DIR / f"{id_}.log").unlink(missing_ok=True)
+        except OSError:
+            pass
 
     # ---- persistence ----
 
@@ -1195,8 +1253,13 @@ class DownloadManager:
                 # streams (mp4 video + webm audio) default to .mkv/.webm
                 # even when the user asked for MP4. `merge_output_format`
                 # supports only well-known containers.
+                # Default to mp4 whenever the user didn't pin a specific
+                # per-video format (i.e. quality-shortcut adds and playlist
+                # batches). Without this, playlist entries land as .webm
+                # because YouTube's higher-quality VP9 streams outrank H.264
+                # on yt-dlp's default sort.
                 target_container = container or (
-                    "mp4" if not item_format or item_format == "best" else ""
+                    "mp4" if not item_format or item_format in self._QUALITY_MAP else ""
                 )
                 if target_container in ("mp4", "webm", "mkv", "m4a"):
                     extra_opts["merge_output_format"] = target_container
@@ -1255,14 +1318,19 @@ class DownloadManager:
     # whatever the video does have instead of failing with "format not
     # available". Order matters: try the exact ceiling first, then merged
     # fallback, then any combined.
+    # Prefer MP4 (H.264 video + m4a audio) so playlist downloads default to
+    # a universally playable container. YouTube usually has both MP4 and
+    # WEBM available at every height; without the ext filter yt-dlp picks
+    # WEBM at 1080p+ (VP9 wins by bitrate score), which needs VLC to play.
+    # Order per row: MP4 → any codec at same height → best <= height → best.
     _QUALITY_MAP: Dict[str, str] = {
-        "best":  "bestvideo+bestaudio/best",
-        "2160p": "bestvideo[height<=2160]+bestaudio/best[height<=2160]/bestvideo+bestaudio/best",
-        "1440p": "bestvideo[height<=1440]+bestaudio/best[height<=1440]/bestvideo+bestaudio/best",
-        "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
-        "720p":  "bestvideo[height<=720]+bestaudio/best[height<=720]/bestvideo+bestaudio/best",
-        "480p":  "bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best",
-        "360p":  "bestvideo[height<=360]+bestaudio/best[height<=360]/bestvideo+bestaudio/best",
+        "best":  "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/best",
+        "2160p": "bv*[height<=2160][ext=mp4]+ba[ext=m4a]/bv*[height<=2160]+ba/best[height<=2160]/best",
+        "1440p": "bv*[height<=1440][ext=mp4]+ba[ext=m4a]/bv*[height<=1440]+ba/best[height<=1440]/best",
+        "1080p": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/best[height<=1080]/best",
+        "720p":  "bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/best[height<=720]/best",
+        "480p":  "bv*[height<=480][ext=mp4]+ba[ext=m4a]/bv*[height<=480]+ba/best[height<=480]/best",
+        "360p":  "bv*[height<=360][ext=mp4]+ba[ext=m4a]/bv*[height<=360]+ba/best[height<=360]/best",
         "audio": "bestaudio/best",
     }
 
@@ -1455,6 +1523,21 @@ class PyBridge:
 
     def get_queue(self) -> List[Dict[str, Any]]:
         return self._mgr.all()
+
+    def check_duplicates_bulk(self, urls: List[str]) -> Dict[str, Any]:
+        """Called before submitting a playlist or multi-URL batch. Runs
+        the single-URL check across every entry and returns a summary the
+        UI can use for one prompt ("N of M already downloaded — skip
+        duplicates / download all again / cancel"). Avoids nagging with
+        one prompt per duplicated entry."""
+        dupes: List[str] = []
+        for u in urls or []:
+            u = (u or "").strip()
+            if not u:
+                continue
+            if self.check_duplicate(u).get("where"):
+                dupes.append(u)
+        return {"duplicates": dupes, "count": len(dupes), "total": len(urls or [])}
 
     def check_duplicate(self, url: str) -> Dict[str, Any]:
         """Called from the Add URL dialog before submitting. Tells the UI
@@ -2034,6 +2117,19 @@ class PyBridge:
 
     def app_version(self) -> str:
         return APP_VERSION
+
+    def open_issues_page(self) -> bool:
+        """Open the GitHub issues page in the user's default browser.
+        Wired to the "Report an issue" button in Settings and the sidebar
+        footer link. Using webbrowser (not the pywebview window) ensures
+        the page opens externally instead of hijacking the app view."""
+        import webbrowser
+        try:
+            webbrowser.open("https://github.com/Oluwatemmy/Youtube-Downloader/issues/new")
+            return True
+        except Exception:
+            traceback.print_exc()
+            return False
 
     def ytdlp_version(self) -> str:
         try:
