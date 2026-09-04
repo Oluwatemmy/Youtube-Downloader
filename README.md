@@ -72,7 +72,10 @@ folder — nobody else can see any of it unless you copy it out yourself.
   — pulls the audio and produces a real `.mp3` via FFmpeg, not just the
   source audio stream
 - **Playlist support** — paste a playlist URL, get a checklist of videos;
-  batch or subset, all queued into a subfolder named after the playlist
+  batch or subset, all queued into a subfolder named after the playlist.
+  Files are numbered by playlist position (`01 - Title.mp4`, `02 - …`)
+  so they sort in playlist order even though downloads finish out of
+  order; a picked subset keeps its original numbers
 - **Subtitle dropdown in Add URL** — lists every language YouTube has for
   the video (English, Spanish, French, etc., with `(auto)` on
   machine-transcribed tracks). Pick one and it gets embedded into the
@@ -140,7 +143,10 @@ folder — nobody else can see any of it unless you copy it out yourself.
   (YouTube outage), network unreachable
 - **yt-dlp auto-updater** — Settings has a "Check for updates" button and
   a quiet weekly check that shows a dot in the sidebar when a new release
-  is out. Sticks to stable releases (nightlies can regress the size column).
+  is out. Update downloads the release straight from PyPI (checksum
+  verified) into `%APPDATA%\YouTubeDownloader\ytdlp\` and offers a
+  one-click restart — no pip, works in the installed app. Sticks to
+  stable releases (nightlies can regress the size column).
 - **Report an issue** — link in the sidebar footer and Settings that opens
   the GitHub issues page in your default browser
 - **Crash handler** — uncaught errors surface as a real dialog with the
@@ -257,7 +263,8 @@ will say which one:
 
 **"Requested format is not available."**
 Usually means yt-dlp is out of date. Settings → **yt-dlp version** → **Check
-for updates**. Install → restart the app.
+for updates** → **Update** → **Restart to finish**. The sidebar footer
+shows the version that's actually running after the restart.
 
 **"HTTP Error 403" on a specific video.**
 Either the video is age-restricted (needs signed-in cookies) or your session
@@ -286,6 +293,8 @@ Everything the app writes lives under `%APPDATA%\YouTubeDownloader\`:
 | `settings.json` | UI preferences, cookies path, mp3 bitrate, ffmpeg last-check |
 | `queue.json` | Current queue, restored on restart |
 | `history.json` | Completed / failed download log — powers Analytics |
+| `logs\` | Per-download yt-dlp output (the Log tab) |
+| `ytdlp\` | yt-dlp releases installed via Check for updates; shadows the bundled copy until a newer app build ships one |
 
 Wipe these to fully reset. Downloads themselves go to your chosen download
 folder (defaults to `%USERPROFILE%\Downloads\YouTube\`); playlists get their
@@ -305,6 +314,9 @@ app/                        Runtime Python
   main.py                     pywebview entry, ffmpeg auto-install
   bridge.py                   DownloadManager, PyBridge JS API,
                               persistence, cookies fallback chain
+  ytdlp_runtime.py            In-app yt-dlp updater: PyPI wheel →
+                              %APPDATA% override folder → sys.path
+  relaunch.py                 Restart-in-place after an update
   legacy_gui.py               Tkinter fallback UI
   legacy_backend.py           Async yt-dlp wrapper for legacy_gui
 
@@ -328,6 +340,7 @@ scripts/                    Dev + build tooling
 packaging/
   youtube_downloader.spec     PyInstaller spec (one-folder, --windowed)
 docs/                       Screenshot + release-facing docs
+tests/                      pytest suite (venv\Scripts\python -m pytest tests)
 ```
 
 Downloads are managed by `DownloadManager` (a thread-pool wrapping yt-dlp
@@ -385,8 +398,10 @@ is appreciated. Rough guidelines:
   and use the `trap` pattern for visible errors. CSS uses design tokens
   from `styles.css` — don't hardcode colours.
 - **Test in dev mode** — `venv\Scripts\python launcher.py` runs against
-  live source. If your change affects the packaged exe (PyInstaller spec,
-  install scripts), test with a fresh build via `scripts\build.ps1`.
+  live source, and `venv\Scripts\python -m pytest tests` runs the unit
+  tests (install `requirements-dev.txt` first). If your change affects
+  the packaged exe (PyInstaller spec, install scripts), test with a fresh
+  build via `scripts\build.ps1`.
 - **Keep the installer small.** The current ~27 MB is a feature; be
   cautious about adding heavy dependencies. If you want to add PO token
   support / bgutil / Node bundling / etc., open an issue first — the

@@ -41,6 +41,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import yt_dlp
 
+from app import relaunch, ytdlp_runtime
+
 
 # Displayed in the sidebar and available to JS via `api.app_version()`.
 # Bump per release. Keep in sync with the `-Version` arg to build.ps1.
@@ -53,13 +55,7 @@ APP_VERSION = "v1.0.0"
 
 def _config_dir() -> Path:
     """AppData location for settings/analytics/history."""
-    if sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", str(Path.home())))
-    else:
-        base = Path.home() / ".config"
-    d = base / "YouTubeDownloader"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return ytdlp_runtime.config_dir()
 
 
 SETTINGS_FILE   = _config_dir() / "settings.json"
@@ -147,6 +143,25 @@ _LANG_NAMES: Dict[str, str] = {
     "sv": "Swedish",       "fa": "Persian",
     "he": "Hebrew",        "uk": "Ukrainian",
 }
+
+
+def _playlist_prefix(item: Dict[str, Any]) -> str:
+    """Filename prefix that keeps playlist items in playlist order on disk
+    ("03 - Title.mp4"). With several workers, item 7 can finish before
+    item 2, and Explorer sorts by name or date — neither is the playlist
+    order. Empty for non-playlist rows, rows without a known position, and
+    rows queued by app versions that didn't record one."""
+    if not item or not item.get("playlist_folder"):
+        return ""
+    try:
+        index = int(item.get("playlist_index") or 0)
+        count = int(item.get("playlist_count") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if index <= 0:
+        return ""
+    width = max(2, len(str(max(count, index))))
+    return f"{index:0{width}d} - "
 
 
 def _friendly_dl_error(raw: str) -> str:
@@ -525,7 +540,8 @@ class DownloadManager:
     def add(self, url: str, format_id: Optional[str] = None,
             audio: bool = False, bitrate: str = "192",
             playlist_folder: str = "", container: str = "",
-            force: bool = False, subs: str = "") -> int:
+            force: bool = False, subs: str = "",
+            playlist_index: int = 0, playlist_count: int = 0) -> int:
         url = _normalize_url(url.strip())
         if not url:
             raise ValueError("empty url")
@@ -550,6 +566,10 @@ class DownloadManager:
             # When set, the download goes into <folder>/<playlist_folder>/
             # so playlist items don't scatter across the root download dir.
             item["playlist_folder"] = _sanitize_folder_name(playlist_folder) if playlist_folder else ""
+            # 1-based position in the full playlist (0 = unknown) and the
+            # playlist length, used to build the "03 - " filename prefix.
+            item["playlist_index"] = int(playlist_index or 0)
+            item["playlist_count"] = int(playlist_count or 0)
             # Target output container (mp4 / webm / mkv). Tells yt-dlp to
             # remux the merged file into this extension so the output
             # matches the label the user picked, instead of defaulting to
@@ -578,10 +598,19 @@ class DownloadManager:
     def add_batch(self, urls: List[str], format_id: Optional[str] = None,
                   audio: bool = False, bitrate: str = "192",
                   playlist_folder: str = "", container: str = "",
-                  force: bool = False, subs: str = "") -> List[int]:
+                  force: bool = False, subs: str = "",
+                  playlist_indexes: Optional[Dict[str, int]] = None,
+                  playlist_count: int = 0) -> List[int]:
+        # `playlist_indexes` maps url -> 1-based position in the full
+        # playlist (the UI sends it for playlist adds; batch-tab adds have
+        # none). Keyed by the raw URL the UI showed, so look up before
+        # `add` normalizes it.
+        indexes = playlist_indexes or {}
         return [self.add(u, format_id=format_id, audio=audio, bitrate=bitrate,
                          playlist_folder=playlist_folder, container=container,
-                         force=force, subs=subs)
+                         force=force, subs=subs,
+                         playlist_index=int(indexes.get(u) or indexes.get(u.strip()) or 0),
+                         playlist_count=playlist_count)
                 for u in urls if u.strip()]
 
     def remove(self, id_: int) -> None:
@@ -631,7 +660,7 @@ class DownloadManager:
                     base_dir = Path(self._settings.get("folder", str(Path.home() / "Downloads")))
                     sub = captured.get("playlist_folder") or ""
                     download_dir = base_dir / sub if sub else base_dir
-                    stem = title.replace(":", "-").replace("/", "-").replace("?", "")[:120]
+                    stem = _playlist_prefix(captured) + title.replace(":", "-").replace("/", "-").replace("?", "")[:120]
                     for pattern in (f"{stem}*.part*", f"{stem}*.ytdl",
                                     f"{stem}*.vtt", f"{stem}*.srt", f"{stem}*.ass"):
                         for p in download_dir.glob(pattern):
@@ -790,7 +819,7 @@ class DownloadManager:
         if not download_dir.exists():
             return None
         # yt-dlp sanitizes some chars in the output template; mirror that.
-        stem = title.replace(":", "-").replace("/", "-").replace("?", "").replace("|", "-")[:120]
+        stem = _playlist_prefix(item) + title.replace(":", "-").replace("/", "-").replace("?", "").replace("|", "-")[:120]
         exts = (".mp3", ".m4a", ".mp4", ".mkv", ".webm") if item.get("audio_only") \
             else (".mp4", ".mkv", ".webm", ".m4a", ".mp3")
         # Prefer exact stem match, then fall back to prefix match.
@@ -926,6 +955,7 @@ class DownloadManager:
             "thumbnail": "",
             "audio_only": False, "audio_bitrate": "192",
             "playlist_folder": "", "container": "",
+            "playlist_index": 0, "playlist_count": 0,
         }
 
     def _update(self, id_: int, **fields) -> None:
@@ -1165,6 +1195,10 @@ class DownloadManager:
                 if not it:
                     return
                 url = it["url"]
+                # "03 - " for playlist items, "" otherwise. Applied to the
+                # output template, the display filename, and every glob
+                # below so partial sweeps and re-download numbering line up.
+                prefix = _playlist_prefix(it)
             self._update(id_, status="Downloading", speed="—", eta="—")
             self._log(id_, "tx3", f"[info] starting download for {url}")
 
@@ -1249,7 +1283,7 @@ class DownloadManager:
                 self._update(
                     id_,
                     title=info.get("title") or url,
-                    file=(info.get("title") or url) + "." + file_ext,
+                    file=prefix + (info.get("title") or url) + "." + file_ext,
                     uploader=info.get("uploader") or "—",
                     dur=_fmt_duration(info.get("duration")),
                     quality=quality_label,
@@ -1272,7 +1306,7 @@ class DownloadManager:
             # across the root download folder alongside standalone videos.
             download_dir = base_dir / subfolder if subfolder else base_dir
             download_dir.mkdir(parents=True, exist_ok=True)
-            outtmpl = str(download_dir / "%(title)s.%(ext)s")
+            outtmpl = str(download_dir / f"{prefix}%(title)s.%(ext)s")
 
             # Force-redownload: if a file with this title is already on disk,
             # bump the filename to "<title> (1).<ext>" (or (2), (3)...) so
@@ -1283,11 +1317,11 @@ class DownloadManager:
                 if base_title:
                     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", base_title).strip().rstrip(".")
                     # Any existing file with that stem, regardless of extension.
-                    if any(download_dir.glob(f"{safe}.*")):
+                    if any(download_dir.glob(f"{prefix}{safe}.*")):
                         n = 1
-                        while any(download_dir.glob(f"{safe} ({n}).*")):
+                        while any(download_dir.glob(f"{prefix}{safe} ({n}).*")):
                             n += 1
-                        outtmpl = str(download_dir / f"%(title)s ({n}).%(ext)s")
+                        outtmpl = str(download_dir / f"{prefix}%(title)s ({n}).%(ext)s")
 
             # Fresh runs sweep leftover .part / .ytdl files so yt-dlp's
             # resume logic can't try to continue from a stale byte offset
@@ -1296,7 +1330,7 @@ class DownloadManager:
             title = (info.get("title") if info else "").strip()
             if fresh and title:
                 stem_glob = title.replace(":", "-").replace("/", "-").replace("?", "")[:120]
-                for pattern in (f"{stem_glob}*.part*", f"{stem_glob}*.ytdl"):
+                for pattern in (f"{prefix}{stem_glob}*.part*", f"{prefix}{stem_glob}*.ytdl"):
                     for p in download_dir.glob(pattern):
                         try:
                             p.unlink()
@@ -1884,6 +1918,8 @@ class PyBridge:
             container=options.get("container") or "",
             force=bool(options.get("force")),
             subs=options.get("subs") or "",
+            playlist_indexes=options.get("playlist_indexes") or {},
+            playlist_count=int(options.get("playlist_count") or 0),
         )}
 
     def get_playlist_entries(self, url: str) -> Dict[str, Any]:
@@ -2403,13 +2439,7 @@ class PyBridge:
         which is worse UX than being one week behind on a YouTube fix.
         Users who need a nightly can pip-install manually."""
         try:
-            import urllib.request
-            req = urllib.request.Request(
-                "https://pypi.org/pypi/yt-dlp/json",
-                headers={"User-Agent": "YouTubeDownloaderPro/1.0"},
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
+            data = ytdlp_runtime._http_json(ytdlp_runtime.pypi_url(ytdlp_runtime.DIST))
         except Exception as exc:
             return {"error": str(exc)[:200]}
         # info.version is the latest STABLE — exactly what we want here.
@@ -2419,43 +2449,57 @@ class PyBridge:
             "current": current,
             "latest": latest,
             "is_prerelease": False,  # stable-only lookup
-            "update_available": self._version_is_newer(latest, current),
+            "update_available": ytdlp_runtime.is_newer(latest, current),
+            # Non-null when the running yt-dlp came from a previous in-app
+            # update rather than the bundle — handy in bug reports.
+            "override": ytdlp_runtime.active_version(),
         }
 
-    def ytdlp_update(self) -> Dict[str, Any]:
-        """Actually run `pip install -U yt-dlp` (stable only). Matches
-        ytdlp_check_update — we only install what we told the user is
-        available. Requires an app restart to load the new module."""
+    def ytdlp_update(self, version: Optional[str] = None) -> Dict[str, Any]:
+        """Install yt-dlp `version` (default: latest stable) into the
+        override folder — see app/ytdlp_runtime.py. No pip involved, which
+        matters because the packaged app has none: the old implementation
+        ran `sys.executable -m pip`, and in the PyInstaller build that
+        just opened a second copy of the app. Takes effect after restart."""
         try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
-                capture_output=True, text=True, timeout=180,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if result.returncode != 0:
-                return {"ok": False, "error": (result.stderr or result.stdout)[-400:]}
-            self._settings["ytdlp_last_check"] = datetime.now().isoformat()
-            _save_json(SETTINGS_FILE, self._settings)
-            return {"ok": True, "restart_needed": True}
+            res = ytdlp_runtime.install_update(version or None)
+        except ytdlp_runtime.UpdateError as exc:
+            return {"ok": False, "error": str(exc)[:300]}
         except Exception as exc:
-            return {"ok": False, "error": str(exc)[:200]}
+            traceback.print_exc()
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
+        self._settings["ytdlp_last_check"] = datetime.now().isoformat()
+        _save_json(SETTINGS_FILE, self._settings)
+        return {"ok": True, "version": res["version"], "restart_needed": True}
+
+    def restart_app(self) -> bool:
+        """Start a fresh copy of the app and close this one. Used after a
+        yt-dlp update so the new module actually gets imported.
+
+        Order matters: spawn first (if that fails we keep this window
+        open), then pause anything mid-download so worker threads unwind
+        and stop writing queue.json under the new process. The new copy
+        waits for our PID to disappear before it touches any files."""
+        try:
+            relaunch.spawn_replacement()
+        except Exception:
+            traceback.print_exc()
+            return False
+        for it in self._mgr.all():
+            if it.get("status") == "Downloading":
+                self._mgr.pause(it["id"])
+        self._mgr.shutdown()
+        if self._window:
+            self._window.destroy()
+        return True
 
     @staticmethod
     def _version_tuple(v: str) -> tuple:
-        """CalVer-friendly version parser. Drops non-numeric segments like
-        `dev0` so nightlies compare cleanly against stables:
-            2026.7.4                 -> (2026, 7, 4)
-            2026.7.23.234303.dev0    -> (2026, 7, 23, 234303)
-        Longer tuples with equal prefixes sort higher, which is what we want."""
-        try:
-            return tuple(int(p) for p in re.split(r"[.\-]", v or "") if p.isdigit())
-        except Exception:
-            return ()
+        return ytdlp_runtime.version_tuple(v)
 
     @classmethod
     def _version_is_newer(cls, latest: str, current: str) -> bool:
-        l, c = cls._version_tuple(latest), cls._version_tuple(current)
-        return bool(l and c and l > c)
+        return ytdlp_runtime.is_newer(latest, current)
 
     _YT_URL_RE = re.compile(
         r"https?://(?:www\.|m\.|music\.)?(?:youtube\.com/(?:watch\?[^\s]*v=|playlist\?[^\s]*list=|shorts/|live/)|youtu\.be/)[\w\-?=&/]+",

@@ -1,4 +1,8 @@
-yt-dlp==2026.7.4
+# [default] pulls yt-dlp's optional runtime deps (yt-dlp-ejs for the nsig
+# JS challenge, pycryptodomex, websockets, brotli, mutagen, requests...).
+# Without it a clean build venv produces a bundle that can't decrypt
+# YouTube's signature and tops out at 360p.
+yt-dlp[default]>=2026.7.4
 aiohttp>=3.12.14
 aiofiles>=23.0.0
 tqdm>=4.65.0
