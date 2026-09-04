@@ -1,5 +1,8 @@
 -r requirements.txt
 
+# Tests (run: venv\Scripts\python -m pytest tests)
+pytest>=8.0
+
 # Packaging
 pyinstaller>=6.0.0
 

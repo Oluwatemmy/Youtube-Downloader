@@ -77,7 +77,8 @@ const FakeApi = {
   find_cookies_txt: async () => [],
   check_clipboard_url: async () => ({}),
   ytdlp_check_update: async () => ({ current: "2026.07.04", latest: "2026.07.14", update_available: true }),
-  ytdlp_update:       async () => ({ ok: true, restart_needed: true }),
+  ytdlp_update:       async (v) => ({ ok: true, version: v || "2026.07.14", restart_needed: true }),
+  restart_app:        async () => { console.log("would restart"); return true; },
   get_playlist_entries: async () => ({
     title: "Sample Playlist", count: 3, total_duration: "1:12:34",
     entries: [
@@ -647,37 +648,59 @@ function renderSettings() {
 // shown after a successful install because the new module isn't loaded
 // until the app process restarts.
 function renderYtdlpUpdateControl() {
-  const wrap = el("div"); wrap.style.cssText = "display:flex;align-items:center;gap:10px";
+  // One button, three modes: check → install → restart. A single click
+  // handler dispatching on `mode` (the previous version stacked an
+  // addEventListener handler and an onclick, so "Update to X" re-ran the
+  // check at the same time as the install).
+  const wrap = el("div"); wrap.style.cssText = "display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end";
   const label = el("span"); label.style.cssText = "font:400 12px var(--mono);color:var(--tx3)";
   label.textContent = state.ytdlpVersion || "—";
+  const note = el("span"); note.style.cssText = "flex-basis:100%;text-align:right;font:400 11px var(--mono);color:var(--bad)";
+  note.hidden = true;
   const btn = el("button", { className: "set-btn", text: "Check for updates" });
-  wrap.appendChild(label); wrap.appendChild(btn);
+  wrap.appendChild(label); wrap.appendChild(btn); wrap.appendChild(note);
+
+  let mode = "check";
+  let latest = "";
+  const IDLE = "Check for updates";
+  const backToIdle = (ms) => setTimeout(() => { btn.textContent = IDLE; btn.disabled = false; mode = "check"; }, ms);
+  const fail = (text, err) => {
+    btn.textContent = text;
+    if (err) { note.textContent = err; note.hidden = false; }
+    backToIdle(3000);
+  };
 
   btn.addEventListener("click", async () => {
-    btn.disabled = true; const orig = btn.textContent; btn.textContent = "Checking…";
-    try {
-      const res = await api().ytdlp_check_update();
-      if (res.error) { btn.textContent = "Check failed"; setTimeout(() => (btn.textContent = orig, btn.disabled = false), 2000); return; }
-      label.textContent = res.current;
-      if (!res.update_available) {
-        btn.textContent = "Up to date ✓";
-        setTimeout(() => (btn.textContent = orig, btn.disabled = false), 2000);
-        return;
-      }
-      // Update available — swap button to install mode
-      btn.textContent = `Update to ${res.latest}`; btn.disabled = false;
-      btn.onclick = async () => {
-        btn.disabled = true; btn.textContent = "Installing…";
-        const upd = await api().ytdlp_update();
-        if (upd.ok) {
-          btn.textContent = "Updated — restart the app";
-        } else {
-          btn.textContent = "Install failed";
-          setTimeout(() => (btn.textContent = orig, btn.disabled = false), 2500);
-        }
-      };
-    } catch {
-      btn.textContent = "Check failed"; setTimeout(() => (btn.textContent = orig, btn.disabled = false), 2000);
+    note.hidden = true;
+    if (mode === "check") {
+      btn.disabled = true; btn.textContent = "Checking…";
+      try {
+        const res = await api().ytdlp_check_update();
+        if (res.error) return fail("Check failed", res.error);
+        label.textContent = res.current;
+        if (!res.update_available) { btn.textContent = "Up to date ✓"; return backToIdle(2000); }
+        latest = res.latest; mode = "install";
+        btn.textContent = `Update to ${latest}`; btn.disabled = false;
+      } catch (e) { fail("Check failed", String(e)); }
+      return;
+    }
+    if (mode === "install") {
+      btn.disabled = true; btn.textContent = `Downloading ${latest}…`;
+      try {
+        const upd = await api().ytdlp_update(latest);
+        if (!upd.ok) return fail("Install failed", upd.error);
+        mode = "restart";
+        label.textContent = `${state.ytdlpVersion} → ${upd.version}`;
+        btn.textContent = "Restart to finish"; btn.disabled = false;
+      } catch (e) { fail("Install failed", String(e)); }
+      return;
+    }
+    if (mode === "restart") {
+      btn.disabled = true; btn.textContent = "Restarting…";
+      try {
+        const ok = await api().restart_app();
+        if (!ok) { mode = "restart"; btn.textContent = "Restart to finish"; btn.disabled = false; note.textContent = "Couldn't relaunch automatically — close and reopen the app."; note.hidden = false; }
+      } catch (e) { mode = "restart"; btn.textContent = "Restart to finish"; btn.disabled = false; note.textContent = String(e); note.hidden = false; }
     }
   });
   return wrap;
@@ -1348,7 +1371,14 @@ async function submitDialog() {
     if (outcome === "cancel") return;
     if (outcome === "skip") urls = await filterOutDuplicates(urls);
     if (!urls.length) { closeDialog(); return; }
-    const playlistOpts = { ...options, playlist_folder: state.playlist.title };
+    // Position of each video in the FULL playlist (1-based). The backend
+    // turns it into a "03 - " filename prefix so files sort in playlist
+    // order on disk, even for a picked subset or when item 7 finishes
+    // before item 2.
+    const playlist_indexes = {};
+    entries.forEach((e, i) => { if (!(e.url in playlist_indexes)) playlist_indexes[e.url] = i + 1; });
+    const playlistOpts = { ...options, playlist_folder: state.playlist.title,
+                           playlist_indexes, playlist_count: entries.length };
     if (outcome === "force") playlistOpts.force = true;
     await api().add_batch(urls, playlistOpts);
     closeDialog();
@@ -2006,7 +2036,11 @@ function renderPickerList() {
     const chip = availLabels[avail]
       ? ` <span class="picker-chip">${escapeHtml(availLabels[avail])}</span>`
       : "";
-    info.innerHTML = `<div class="picker-title">${escapeHtml(e.title)}${chip}</div><div class="picker-meta">${escapeHtml(e.uploader || "")}</div>`;
+    // Show the playlist position — it becomes the "03 - " prefix on the
+    // saved file, so the user can see the numbering they'll get.
+    const pos = state.playlist.entries.indexOf(e) + 1;
+    const meta = `#${pos}` + (e.uploader ? ` · ${escapeHtml(e.uploader)}` : "");
+    info.innerHTML = `<div class="picker-title">${escapeHtml(e.title)}${chip}</div><div class="picker-meta">${meta}</div>`;
     const dur = el("span", { className: "picker-dur", text: e.dur || "—" });
     row.appendChild(cb); row.appendChild(thumb); row.appendChild(info); row.appendChild(dur);
     if (!blocked) {

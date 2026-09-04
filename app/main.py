@@ -175,6 +175,18 @@ def _register_aumid() -> None:
 
 
 def main() -> None:
+    # If we're the replacement spawned by Settings → Restart, let the old
+    # process finish flushing queue.json / settings.json before we read them.
+    from app import relaunch, ytdlp_runtime
+    relaunch.wait_for_parent()
+
+    # Prefer an in-app-updated yt-dlp over the bundled one. Has to happen
+    # before app.bridge (and therefore yt_dlp) is imported anywhere.
+    override = ytdlp_runtime.activate()
+    if override:
+        print(f"[yt-dlp] using {override} from {ytdlp_runtime.override_root()}",
+              file=sys.stderr, flush=True)
+
     _register_aumid()
     _ensure_ffmpeg()
 
