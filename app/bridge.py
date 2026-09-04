@@ -46,7 +46,7 @@ from app import relaunch, ytdlp_runtime
 
 # Displayed in the sidebar and available to JS via `api.app_version()`.
 # Bump per release. Keep in sync with the `-Version` arg to build.ps1.
-APP_VERSION = "v1.0.0"
+APP_VERSION = "v1.0.1"
 
 
 # ---------------------------------------------------------------
